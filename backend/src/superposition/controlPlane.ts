@@ -1,6 +1,7 @@
 import {
   BulkOperationCommand, CreateContextCommand, CreateDefaultConfigCommand,
-  CreateDimensionCommand, DeleteContextCommand, GetContextFromConditionCommand,
+  CreateDimensionCommand, DeleteContextCommand, DeleteDefaultConfigCommand,
+  GetContextFromConditionCommand,
   GetResolvedConfigCommand, GetResolvedConfigExplanationCommand,
   ListContextsCommand, ListDefaultConfigsCommand, ListDimensionsCommand,
   type SuperpositionClient, UpdateDefaultConfigCommand,
@@ -111,6 +112,15 @@ export class ControlPlane {
       if (!isAlreadyExists(error)) throw error;
       await this.client.send(new UpdateDefaultConfigCommand(input));
     }
+  }
+
+  /**
+   * Permanently remove a default config key. Only safe once no context
+   * overrides it - Superposition itself refuses the delete otherwise, so
+   * callers that provision test fixtures must delete their contexts first.
+   */
+  async deleteDefaultConfig(key: string): Promise<void> {
+    await this.client.send(new DeleteDefaultConfigCommand({ ...this.base, key }));
   }
 
   async listDimensions(): Promise<{ dimension: string; position: number }[]> {

@@ -17,8 +17,27 @@ beforeAll(async () => {
   await cp.putDefaultConfig(KEY, 'alpha', { type: 'string' }, 'control plane probe');
 });
 
+/**
+ * Keys this file creates that are NOT part of FEATURE_DEFAULTS, so nothing
+ * ever resets or removes them. Left behind, they show up forever in every
+ * other suite's catalog (buildCatalog parses any key that fits the scheme) -
+ * caught when Task 9's `features.test.ts` asserted an exact visible-feature
+ * set. Contexts must be deleted first: Superposition refuses to delete a
+ * default config a context still overrides.
+ */
+const PROBE_DEFAULT_CONFIGS = [
+  KEY,
+  'external.inherited.cp_probe_other',
+  'external.inherited.cp_probe_second',
+  'internal.inherited.cp_probe_secret',
+];
+
 afterAll(async () => {
-  if (cp) await deleteAllContexts(cp);
+  if (!cp) return;
+  await deleteAllContexts(cp);
+  for (const key of PROBE_DEFAULT_CONFIGS) {
+    await cp.deleteDefaultConfig(key).catch(() => {});
+  }
 });
 
 describe('default configs', () => {
