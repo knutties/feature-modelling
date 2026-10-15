@@ -48,4 +48,9 @@ describe('priority arithmetic', () => {
   it('ignores keys that are not dimensions', () => {
     expect(weightOf({ org: 'a', nonsense: 'x' })).toBe(2);
   });
+
+  it('ignores inherited Object.prototype keys rather than yielding NaN', () => {
+    expect(weightOf({ org: 'a', toString: 'x' })).toBe(2);
+    expect(weightOf({ constructor: 'x' })).toBe(0);
+  });
 });

@@ -22,7 +22,11 @@ export const DIMENSION_POSITIONS = {
 export type DimensionName = keyof typeof DIMENSION_POSITIONS;
 
 function isDimensionName(name: string): name is DimensionName {
-  return name in DIMENSION_POSITIONS;
+  // Object.hasOwn, not `in`: `in` also matches Object.prototype keys, so a
+  // condition carrying `toString` or `constructor` would index a function,
+  // making the weight NaN - and NaN compares false against every other weight,
+  // breaking precedence silently instead of loudly.
+  return Object.hasOwn(DIMENSION_POSITIONS, name);
 }
 
 /** The weight Superposition will give a context naming these dimensions. */
