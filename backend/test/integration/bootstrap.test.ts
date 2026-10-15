@@ -14,6 +14,7 @@ beforeAll(async () => {
   await ensureWorkspace(client, SUPERPOSITION.orgId, TEST_WORKSPACE, SUPERPOSITION.adminEmail);
   cp = new ControlPlane(client, SUPERPOSITION.orgId, TEST_WORKSPACE);
   await deleteAllContexts(cp);
+  await repairDriftedPositions();
   await bootstrap(cp);
 });
 
@@ -34,6 +35,53 @@ async function moveDimension(dimension: string, toPosition: number): Promise<voi
     position: toPosition,
     change_reason: CHANGE_REASON,
   }));
+}
+
+/**
+ * Self-healing counterpart to `deleteAllContexts` above, for the same
+ * reason: this workspace is shared across runs, and nothing deletes it
+ * between them, so a crashed earlier run - or this file's own drift test
+ * below, if its restore attempt failed twice - can leave a dimension at the
+ * wrong position permanently. Left alone, every later `bootstrap()` call
+ * against this workspace, in this file or any other sharing it, would then
+ * fail at `assertDimensionPositions` forever, with no run ever able to fix
+ * it. Repairing drift at the START of the run, before any test (including
+ * the drift test) touches the workspace, is the same principle
+ * `deleteAllContexts` already applies to contexts.
+ */
+async function repairDriftedPositions(): Promise<void> {
+  const actual = new Map((await cp.listDimensions()).map((d) => [d.dimension, d.position]));
+  for (const spec of DIMENSION_SPECS) {
+    const current = actual.get(spec.name);
+    if (current !== undefined && current !== spec.position) {
+      await moveDimension(spec.name, spec.position);
+    }
+  }
+}
+
+/**
+ * Restores `killswitch` to `toPosition`, retrying once on a transient
+ * failure (a network blip or server hiccup) before giving up. This only
+ * narrows the window in which a failed restore strands the workspace -
+ * `repairDriftedPositions` above is what actually closes it on the next
+ * run - so the thrown error says so explicitly rather than leaving whoever
+ * hits it to guess.
+ */
+async function restoreKillswitchPosition(toPosition: number): Promise<void> {
+  try {
+    await moveDimension('killswitch', toPosition);
+  } catch {
+    try {
+      await moveDimension('killswitch', toPosition);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(
+        `Failed to restore killswitch to position ${toPosition} after two attempts: ${message}. `
+        + `${TEST_WORKSPACE} may now have killswitch at the wrong position - re-running this `
+        + 'suite will repair it automatically, via repairDriftedPositions in beforeAll.',
+      );
+    }
+  }
 }
 
 describe('bootstrap', () => {
@@ -104,7 +152,7 @@ describe('bootstrap', () => {
       // Moving it back is the exact inverse of the drift above, restoring
       // every dimension's position - not just killswitch's - to what
       // bootstrap already established earlier in this file.
-      await moveDimension('killswitch', killswitchSpec.position);
+      await restoreKillswitchPosition(killswitchSpec.position);
     }
     const byName = new Map((await cp.listDimensions()).map((d) => [d.dimension, d.position]));
     for (const spec of DIMENSION_SPECS) {
