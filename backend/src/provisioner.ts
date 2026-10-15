@@ -78,13 +78,24 @@ export class Provisioner {
   }
 
   /**
-   * Re-run provisioning for an entity. Safe to repeat: each copy is written
-   * with CreateContext, which merges, so re-writing a copy that already landed
-   * changes nothing.
+   * Re-run provisioning for an entity whose first attempt FAILED.
+   *
+   * Only `provisioning_failed` entities are eligible. Re-provisioning a
+   * healthy entity would re-resolve the parent's CURRENT value and merge it
+   * over the frozen copy, unfreezing a copied feature through the back
+   * door - merging makes a retry harmless only when the parent has not
+   * changed since the freeze, which this method cannot assume.
    */
   async retry(path: EntityPath): Promise<CreateEntityResult> {
     const entity = this.store.get(path);
     if (!entity) throw new ProvisionError(`no entity at ${encodePath(path)}`);
+    if (entity.provisioningState !== 'provisioning_failed') {
+      throw new ProvisionError(
+        `${encodePath(path)} is not awaiting retry (state: ${entity.provisioningState}); ` +
+          `re-provisioning a healthy entity would overwrite its frozen copies with the ` +
+          `parent's current values`,
+      );
+    }
     const { copied, skipped } = await this.materializeCopies(path);
     this.store.setState(path, 'ok');
     return { entity, copied, skipped };

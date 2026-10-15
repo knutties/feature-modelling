@@ -191,4 +191,18 @@ describe('retry', () => {
     expect(after!.override).toEqual(before!.override);
     expect(store.get(['acme'])?.provisioningState).toBe('ok');
   });
+
+  // Without the state guard, retry on a healthy entity re-resolves the parent's
+  // CURRENT value and merges it over the frozen copy - unfreezing a copied
+  // feature through the back door.
+  it('refuses to re-provision a healthy entity, leaving its frozen copy intact', async () => {
+    await provisioner.createEntity({ path: ['acme'], name: 'Acme' });
+    await provisioner.createEntity({ path: ['acme', 'm1'], name: 'M1' });
+    await cp.putContext({ org: 'acme' }, { [BUDGET]: 9 }, 'org edit after the freeze');
+
+    await expect(provisioner.retry(['acme', 'm1'])).rejects.toThrow(/not awaiting retry/);
+
+    const context = await cp.getContext({ org: 'acme', merchant: 'm1' });
+    expect(context!.override[BUDGET]).toBe(3);
+  });
 });
