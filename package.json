@@ -1,0 +1,13 @@
+{
+  "name": "feature-modelling",
+  "private": true,
+  "workspaces": ["backend", "frontend"],
+  "scripts": {
+    "bootstrap": "npm run bootstrap -w backend",
+    "seed": "npm run seed -w backend",
+    "test": "npm run test -w backend",
+    "test:integration": "npm run test:integration -w backend",
+    "dev:backend": "npm run dev -w backend",
+    "dev:frontend": "npm run dev -w frontend"
+  }
+}
