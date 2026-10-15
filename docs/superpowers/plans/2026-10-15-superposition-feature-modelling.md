@@ -12,14 +12,14 @@
 
 ## Global Constraints
 
-- Superposition endpoint `http://localhost:8080`; org `localorg`; demo workspace `featuredemo`; integration-test workspace `featuredemo_test`.
+- Superposition endpoint `http://localhost:8080`; org `localorg`; demo workspace `featuredemo`; integration-test workspace `featuredemotest` (no underscore - see the charset note below).
 - Auth is permissive locally. The SDK client takes `token: { token: "some-token" }` — a nested object, not a bare string.
 - npm package names are `superposition-sdk` and `superposition-provider` (**not** `@juspay/...`, which is the in-repo name only). Both at `0.118.2`.
 - Config keys must match `^[a-zA-Z0-9-_]([a-zA-Z0-9-_.]{0,254}[a-zA-Z0-9-_])?$`. No `@`, no leading/trailing dot.
 - Dimension positions are exactly: `org` 1, `merchant` 2, `profile` 3, `customer_cohort` 4, `customer_id` 5, `killswitch` 6. Priority is Σ2^position; these values are load-bearing and must not be changed casually.
 - A cohort dimension's position must be ≤ its parent's. `customer_cohort` (4) ≤ `customer_id` (5).
 - A local cohort's `schema.enum` must include `"otherwise"`.
-- Workspace names: ≤25 chars, `[a-zA-Z0-9_-]`, must not start with a digit.
+- Workspace names: ≤25 chars, **letters and digits only** (`^[a-zA-Z0-9]+$`), must not start with a digit. Superposition's own docs claim underscores and hyphens are allowed; they are not - the live server rejects them with "the workspace name can only contain letters and numbers". Verified directly. Always reference the test workspace through `TEST_WORKSPACE` rather than retyping the name.
 - The provider is configured `{ ttl: 1, use_stale_on_error: true }` (on-demand refresh, not polling).
 - Never read or write the nine pre-existing workspaces in `localorg` (`sdkv2`, `sdkv2itest`, `crt`, `mirror`, `shopconfig`, `a`, `tmp`, `dev`, `test`).
 - Every Superposition write requires a non-empty `change_reason`.
@@ -30,7 +30,7 @@
 Two spec statements proved wrong against the API and are corrected in this plan:
 
 1. **Setting a key is one call, not three.** The spec specifies `GetContextFromCondition` → `UpdateOverride`-or-`CreateContext`. But `CreateContext` is `@idempotent` and merges on an existing condition (`handlers.rs:162-169` passes `replace: false`), so a single `CreateContext` creates-or-merges. Tasks 9 and 10 use the one-call form.
-2. **Workspaces cannot be deleted.** There is no `DeleteWorkspace` operation. The spec's "created and dropped per run" is impossible. Instead `featuredemo_test` is created once if absent and **cleaned at the start of every run** (delete all contexts, then re-run bootstrap, which resets default-config values). Cleaning at start rather than end preserves the spec's intent — a crashed run cannot poison the next one — without accumulating workspaces.
+2. **Workspaces cannot be deleted.** There is no `DeleteWorkspace` operation. The spec's "created and dropped per run" is impossible. Instead `featuredemotest` is created once if absent and **cleaned at the start of every run** (delete all contexts, then re-run bootstrap, which resets default-config values). Cleaning at start rather than end preserves the spec's intent — a crashed run cannot poison the next one — without accumulating workspaces.
 
 ## Review Focus
 
@@ -1500,7 +1500,7 @@ export { ensureWorkspace } from '../../src/superposition/workspace.js';
  * drop their workspace. Instead one fixed workspace is reused and cleaned at
  * the START of each run - a crashed run therefore cannot poison the next.
  */
-export const TEST_WORKSPACE = 'featuredemo_test';
+export const TEST_WORKSPACE = 'featuredemotest';
 
 /**
  * Deleting contexts is enough of a reset: bootstrap is idempotent and rewrites
@@ -5288,7 +5288,7 @@ priority arithmetic (14 > 6 > 2, 30 > 14, 64 > 62), because that ordering is
 load-bearing and invisible — a dimension added later at a careless position
 would break inheritance while every other test still passed.
 
-Integration tests share the `featuredemo_test` workspace and clean it at the
+Integration tests share the `featuredemotest` workspace and clean it at the
 *start* of each run, since Superposition has no `DeleteWorkspace` operation; a
 crashed run therefore cannot poison the next.
 
