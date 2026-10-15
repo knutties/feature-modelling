@@ -77,6 +77,35 @@ export const FEATURE_DEFAULTS: FeatureDefault[] = [
 ];
 
 /**
+ * Guard against a workspace that has drifted from `DIMENSION_SPECS` - a
+ * dimension added or edited by hand, or a previous run that crashed between
+ * dimension creations. Superposition weights a context as the sum of
+ * 2^position over the dimensions it names, highest wins, so a single wrong
+ * position breaks precedence with no symptom other than the demo quietly
+ * resolving the wrong value. Throwing here turns that silent failure into a
+ * loud one, naming every dimension whose live position does not match its
+ * spec.
+ */
+async function assertDimensionPositions(controlPlane: ControlPlane): Promise<void> {
+  const actual = new Map(
+    (await controlPlane.listDimensions()).map((d) => [d.dimension, d.position]),
+  );
+  const wrong = DIMENSION_SPECS
+    .filter((spec) => actual.get(spec.name) !== spec.position)
+    .map((spec) => `${spec.name}: expected ${spec.position}, got ${actual.get(spec.name) ?? 'absent'}`);
+  if (wrong.length > 0) {
+    throw new Error(
+      `dimension positions are wrong, so context precedence is broken: ${wrong.join('; ')}. `
+      + 'Priority is the sum of 2^position over the dimensions a context names, and the '
+      + 'highest sum wins, so a wrong position silently breaks inheritance between entities, '
+      + 'cohorts, and the kill switch. The workspace has likely drifted from DIMENSION_SPECS '
+      + '(a dimension created or edited outside bootstrap, or a previous run that crashed '
+      + 'mid-way) - inspect its dimensions before resolving configs against it.',
+    );
+  }
+}
+
+/**
  * Create dimensions and default configs. Safe to re-run: dimensions are
  * created-if-absent and feature defaults are written unconditionally, so a
  * bootstrap also RESETS any default an operator or a test changed. That reset
@@ -114,6 +143,17 @@ export const FEATURE_DEFAULTS: FeatureDefault[] = [
  *
  * `createDimension` is idempotent and leaves an existing dimension alone, so
  * on a re-run this whole dance is skipped - the parent is already there.
+ *
+ * That shift-on-insert arithmetic is correct for a workspace that only ever
+ * goes through this function, but it depends on the exact starting state:
+ * a dimension added by hand through the admin UI, or a run that crashed
+ * half-way, could leave positions that this function's own createDimension
+ * calls would then never correct (createDimension leaves an existing
+ * dimension alone). Wrong positions break precedence silently - priority is
+ * the sum of 2^position, so one wrong position can flip which context wins
+ * with no error anywhere - so `assertDimensionPositions` reads the
+ * dimensions back after creation and fails loudly if any position drifted
+ * from `DIMENSION_SPECS`, rather than letting the demo misbehave quietly.
  */
 export async function bootstrap(controlPlane: ControlPlane): Promise<void> {
   const cohortParentNames = new Set(
@@ -131,6 +171,8 @@ export async function bootstrap(controlPlane: ControlPlane): Promise<void> {
   for (const spec of rest) {
     await controlPlane.createDimension(spec);
   }
+
+  await assertDimensionPositions(controlPlane);
 
   for (const feature of FEATURE_DEFAULTS) {
     await controlPlane.putDefaultConfig(

@@ -1,19 +1,40 @@
+import { type SuperpositionClient, UpdateDimensionCommand } from 'superposition-sdk';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { ControlPlane } from '../../src/superposition/controlPlane.js';
 import { makeClient } from '../../src/superposition/client.js';
-import { SUPERPOSITION } from '../../src/superposition/config.js';
+import { CHANGE_REASON, SUPERPOSITION } from '../../src/superposition/config.js';
 import { DIMENSION_SPECS, FEATURE_DEFAULTS, bootstrap } from '../../src/superposition/schema.js';
 import { TEST_WORKSPACE, deleteAllContexts, ensureWorkspace } from '../helpers/workspace.js';
 
+let client: SuperpositionClient;
 let cp: ControlPlane;
 
 beforeAll(async () => {
-  const client = makeClient();
+  client = makeClient();
   await ensureWorkspace(client, SUPERPOSITION.orgId, TEST_WORKSPACE, SUPERPOSITION.adminEmail);
   cp = new ControlPlane(client, SUPERPOSITION.orgId, TEST_WORKSPACE);
   await deleteAllContexts(cp);
   await bootstrap(cp);
 });
+
+/**
+ * ControlPlane has no updateDimension - nothing in bootstrap() needs one -
+ * so this test drives UpdateDimensionCommand directly to simulate a
+ * workspace that drifted (a dimension moved by hand, or a crashed run).
+ * Moving `killswitch` to `toPosition` and back are exact inverses of each
+ * other server-side (the position update shifts every dimension strictly
+ * between the old and new position by one, in the opposite direction each
+ * time), so the second call restores the original arrangement exactly.
+ */
+async function moveDimension(dimension: string, toPosition: number): Promise<void> {
+  await client.send(new UpdateDimensionCommand({
+    org_id: SUPERPOSITION.orgId,
+    workspace_id: TEST_WORKSPACE,
+    dimension,
+    position: toPosition,
+    change_reason: CHANGE_REASON,
+  }));
+}
 
 describe('bootstrap', () => {
   it('creates every dimension at its specified position', async () => {
@@ -72,5 +93,26 @@ describe('bootstrap', () => {
     for (const feature of FEATURE_DEFAULTS) {
       expect(gold[feature.key]).toEqual(feature.value);
     }
+  });
+
+  it('refuses to proceed when a dimension position has drifted from the spec', async () => {
+    const killswitchSpec = DIMENSION_SPECS.find((spec) => spec.name === 'killswitch')!;
+    await moveDimension('killswitch', 4);
+    try {
+      await expect(bootstrap(cp)).rejects.toThrow(/killswitch: expected 6, got 4/);
+    } finally {
+      // Moving it back is the exact inverse of the drift above, restoring
+      // every dimension's position - not just killswitch's - to what
+      // bootstrap already established earlier in this file.
+      await moveDimension('killswitch', killswitchSpec.position);
+    }
+    const byName = new Map((await cp.listDimensions()).map((d) => [d.dimension, d.position]));
+    for (const spec of DIMENSION_SPECS) {
+      expect(byName.get(spec.name)).toBe(spec.position);
+    }
+    // The guard also needs to pass again once positions are back to normal,
+    // otherwise this test would have "fixed" the drift by making bootstrap
+    // itself permanently unable to run against this workspace.
+    await expect(bootstrap(cp)).resolves.not.toThrow();
   });
 });
