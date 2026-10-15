@@ -311,11 +311,12 @@ each step shows one context changing the value, which is the cascade made litera
 
 ### Writing and removing overrides
 
-Setting a key on an entity:
-
-1. `GetContextFromCondition` for the entity's exact path condition.
-2. Exists → `UpdateOverride` (merges the single key in).
-3. Absent → `CreateContext` with the condition and that one override.
+Setting a key on an entity is a single `CreateContext` call. It is `@idempotent`
+and merges on an existing condition, so it creates the context when the
+condition is new and merges the one key in when it is not, leaving the entity's
+other overrides alone. (An earlier draft of this spec specified a
+`GetContextFromCondition` lookup followed by `UpdateOverride` or
+`CreateContext`; the lookup is unnecessary.)
 
 Contexts are created lazily. An entity with nothing to copy and no edits has no
 context at all, which keeps the Superposition admin UI readable as a picture of the
@@ -327,10 +328,9 @@ remaining overrides, in a single transaction. If the key was the context's only
 override, the `DELETE` alone suffices.
 
 `ContextAction` also offers `REPLACE`, which may shrink an override set in one
-action. An integration test should establish whether it truly replaces rather than
-merges; if it does, the revert path simplifies to a single action. Until that test
-exists, the DELETE+PUT form is specified because it rests only on semantics already
-confirmed in the source.
+action. The DELETE+PUT form is specified because it rests only on semantics
+already confirmed in the source; an integration test establishes that it works,
+and whether `REPLACE` would do the same in one action.
 
 ### Endpoints
 
@@ -414,9 +414,13 @@ Test-driven, per the project workflow. Two tiers.
 - persona filtering, both read and write, including that `customer` maps to
   `prefix=external.` and never to a post-hoc filter
 
-**Integration, against the live instance** in a throwaway workspace
-`featuredemo_test`, created and dropped per run so a failed run cannot poison a later
-one. These assert the model's behavioral claims rather than its internals:
+**Integration, against the live instance** in a dedicated workspace
+`featuredemo_test`. Superposition has no `DeleteWorkspace` operation, so the
+workspace cannot be dropped; instead it is created once if absent and **cleaned
+at the start of every run**. Cleaning at the start rather than the end is what
+keeps the intent — a crashed run cannot poison a later one — without
+accumulating workspaces. These tests assert the model's behavioral claims
+rather than its internals:
 
 - bootstrap is idempotent — running it twice leaves the same state
 - creating an entity writes copies at exactly the expected levels, and writes nothing
@@ -464,7 +468,12 @@ Superposition organisations or workspaces beyond the one.
 ## Open implementation details
 
 1. Whether `ContextAction::REPLACE` shrinks an override set in one action, which
-   would simplify the revert path. Settle with an integration test.
+   would simplify the revert path. Settle with an integration test; the
+   specified DELETE+PUT form works either way.
 2. Whether `featuredemo` needs `mandatory_dimensions`. Default to none; the existing
    nine workspaces set none, and a mandatory dimension would force every context to
    name it.
+3. Whether the paginated list operations (`ListDefaultConfigs`, `ListDimensions`,
+   `ListContexts`) take `all: true` or require `count`/`page`. The adapter assumes
+   `all: true`; this is the one SDK detail not verified against the client before
+   implementation.
