@@ -1,0 +1,60 @@
+# Feature modelling demonstration using Superposition
+
+We believe that values associated with an entity in software can be classified into two:
+
+1. Features
+2. Attributes
+
+## Classification of values
+
+Features have the following characteristics:
+
+1. They are inheritable across an hierarchy
+2. They can be overridden typically
+3. At times of emergency, feature behaviour can be wholesale modified (aka kill switch)
+
+Attributes have the following characteristics:
+
+1. They are owned characteristics of an entity that are not inherited (say location of a store entity is an attribute)
+2. They cannot be overridden.
+2. They have no special requirements in times of emergency.
+
+
+## Types of features
+Features themselves can be typically categorized into two based on whether it is externally manage-able or is it just internally manage-able.
+
+1. By externally manageable we mean customers of the software have a self-serve UI to modify them - no other configuration is even visible to them.
+2. By internally manageable we mean only the platform operators can see and manage them.
+
+Note that we are not using RBAC or ACL to manage internal/external - but we are explicitly calling out if a feature is manageable by customers or not.
+
+In a setup where there is an hierarchy of entities, and where features values can be set across the hierarchy - there exists another classification of features based on whether an entity at any level inherits feature values from its parent or always has its own copy (which is copied at the time of entity creation).
+
+Note that though the value can be copied by an entity at a level n, it will most likely need to allow inheritance at levels > than n (like say enable a feature for a customer cohort under a merchant entity which copies its values from the organization).
+
+  1. Features that are to be always inherited by an entity in a hierarchy
+  2. Features that should be copied from the entity's parent at the time of entity setup
+
+## Demo
+
+An application (like Hyperswitch) which involves a 3 level hierarchy:
+
+1. organization
+2. merchant
+3. profile
+
+We could have a cohorted dimension of customers for whom profile can customize a feature.
+
+All these levels will have their own attributes that would be maintained in a database which we can skip for this demo.  We would like to demonstrate features which are a combination of both the categories i.e. totally 4 in all - 
+1. internal + inherited
+2. internal + copied (not very important - but for completeness)
+2. external + interhited
+2. external + copied
+
+The demo will have a frontend, backend which uses the Superposition provider to talk to Superposition (locally available at localhost:8080)
+
+The demo should include following:
+
+1. creation of entities which will automatically setup copied overrides etc as needed.
+2. a feature management page for each entity
+3. ability to specialize a feature for a customer cohort
