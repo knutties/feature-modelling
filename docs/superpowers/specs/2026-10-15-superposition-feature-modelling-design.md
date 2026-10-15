@@ -415,7 +415,11 @@ Test-driven, per the project workflow. Two tiers.
   `prefix=external.` and never to a post-hoc filter
 
 **Integration, against the live instance** in a dedicated workspace
-`featuredemo_test`. Superposition has no `DeleteWorkspace` operation, so the
+`featuredemotest` (Task 5 found that `featuredemo_test` is rejected: the live
+server validates workspace names against `^[a-zA-Z0-9]+$`, so underscores and
+hyphens 400; always reference this name through `TEST_WORKSPACE` from
+`test/helpers/workspace.ts` rather than retyping it). Superposition has no
+`DeleteWorkspace` operation, so the
 workspace cannot be dropped; instead it is created once if absent and **cleaned
 at the start of every run**. Cleaning at the start rather than the end is what
 keeps the intent — a crashed run cannot poison a later one — without
@@ -467,13 +471,17 @@ Superposition organisations or workspaces beyond the one.
 
 ## Open implementation details
 
-1. Whether `ContextAction::REPLACE` shrinks an override set in one action, which
-   would simplify the revert path. Settle with an integration test; the
-   specified DELETE+PUT form works either way.
+1. Settled by Task 5's integration test: DELETE+PUT via `BulkOperationCommand`
+   is confirmed working for shrinking an override set, so no further change is
+   needed.
 2. Whether `featuredemo` needs `mandatory_dimensions`. Default to none; the existing
    nine workspaces set none, and a mandatory dimension would force every context to
    name it.
-3. Whether the paginated list operations (`ListDefaultConfigs`, `ListDimensions`,
-   `ListContexts`) take `all: true` or require `count`/`page`. The adapter assumes
-   `all: true`; this is the one SDK detail not verified against the client before
-   implementation.
+3. Settled by Task 5: `all: true` is accepted by `ListDefaultConfigs`,
+   `ListDimensions` and `ListContexts` against the live instance - no switch to
+   `count`/`page` pagination was needed.
+4. Also found by Task 5, not anticipated by this spec: `CreateContext` (and the
+   `PUT` branch of `BulkOperation`) returns 400 "Description is required when
+   context does not exist" unless `description` is set on a brand-new context -
+   it is only optional when the condition already has a context. The adapter
+   sets `description` to the same string as `change_reason`.
