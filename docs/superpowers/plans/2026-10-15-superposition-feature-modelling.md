@@ -2628,6 +2628,20 @@ describe('retry', () => {
     expect(after!.override).toEqual(before!.override);
     expect(store.get(['acme'])?.provisioningState).toBe('ok');
   });
+
+  // Without the state guard, retry on a healthy entity re-resolves the parent's
+  // CURRENT value and merges it over the frozen copy - unfreezing a copied
+  // feature through the back door.
+  it('refuses to re-provision a healthy entity, leaving its frozen copy intact', async () => {
+    await provisioner.createEntity({ path: ['acme'], name: 'Acme' });
+    await provisioner.createEntity({ path: ['acme', 'm1'], name: 'M1' });
+    await cp.putContext({ org: 'acme' }, { [BUDGET]: 9 }, 'org edit after the freeze');
+
+    await expect(provisioner.retry(['acme', 'm1'])).rejects.toThrow(/not awaiting retry/);
+
+    const context = await cp.getContext({ org: 'acme', merchant: 'm1' });
+    expect(context!.override[BUDGET]).toBe(3);
+  });
 });
 ```
 
@@ -2721,13 +2735,26 @@ export class Provisioner {
   }
 
   /**
-   * Re-run provisioning for an entity. Safe to repeat: each copy is written
-   * with CreateContext, which merges, so re-writing a copy that already landed
-   * changes nothing.
+   * Re-run provisioning for an entity whose first attempt FAILED.
+   *
+   * Guarded to `provisioning_failed` deliberately. Re-running against an entity
+   * that already provisioned would re-resolve the parent's CURRENT value and
+   * merge it over the frozen copy - so if the parent moved in the meantime,
+   * retry would silently unfreeze a copied feature, which is the one thing a
+   * copied feature exists to prevent. CreateContext's merge makes a retry
+   * harmless only when the parent has not changed, and that is not something
+   * this method can assume.
    */
   async retry(path: EntityPath): Promise<CreateEntityResult> {
     const entity = this.store.get(path);
     if (!entity) throw new ProvisionError(`no entity at ${encodePath(path)}`);
+    if (entity.provisioningState !== 'provisioning_failed') {
+      throw new ProvisionError(
+        `${encodePath(path)} is not awaiting retry (state: ${entity.provisioningState}); ` +
+          `re-provisioning a healthy entity would overwrite its frozen copies with the ` +
+          `parent's current values`,
+      );
+    }
     const { copied, skipped } = await this.materializeCopies(path);
     this.store.setState(path, 'ok');
     return { entity, copied, skipped };
