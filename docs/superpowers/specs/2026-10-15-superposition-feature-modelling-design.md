@@ -292,6 +292,28 @@ the entity's own full path, the value is *own*; if it names a proper ancestor pr
 the value is *inherited from* that ancestor; if the timeline is empty, the value is
 the *platform default*.
 
+**The timeline must be filtered first, and this is not optional.** Task 9 found,
+against the live server, that the explanation includes a step for *every* context
+whose condition matches the resolution query — whether or not that context's override
+actually names the explained key. A non-owning context appears as a pass-through step
+with `value_after` equal to `value_before`
+(`crates/context_aware_config/src/api/config/helpers.rs` pushes a step per matching
+context unconditionally). So an entity that owns some *other* copied feature emits a
+trailing pass-through step for keys it does not own, and reading the last step
+naively reports that entity as the owner. Concretely: a profile owning
+`connector_retry_budget` was reported as owning `checkout_theme` too, when it
+inherits it from its merchant — wrong in exactly the merchant-boundary case this demo
+exists to show.
+
+The filter cannot key off `value_before === value_after`, because a genuine owner may
+set the same value its parent already had — the equal-values case above. The only
+sound discriminator is whether the context's override *names the key*, which requires
+the override map rather than the timeline alone. The backend therefore cross-checks
+each step's `context_id` against the live contexts' overrides and passes only genuine
+owners to `provenanceOf`. The filter is applied both to the provenance computation and
+to the timeline the UI displays, so the "why?" panel never shows a context that did
+not participate. The override map is fetched once per page rather than per feature.
+
 Deriving provenance from the resolver's own explanation rather than reimplementing
 the cascade matters twice over. It cannot drift from the real resolution logic, which
 a parallel implementation eventually would. And it rules out the tempting shortcut of
