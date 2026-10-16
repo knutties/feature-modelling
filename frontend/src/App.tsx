@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { type EntityNode, type Persona, getEntities } from './api.js';
+import { EntityFeatures } from './EntityFeatures.js';
 import { Hierarchy } from './Hierarchy.js';
 
 export function App() {
@@ -54,7 +55,7 @@ export function App() {
         />
         <div className="detail">
           {selected
-            ? <p className="hint">Entity selected: {selected.join('/')} — feature table arrives in Task 12.</p>
+            ? <EntityFeatures path={selected} persona={persona} />
             : <p className="hint">Select an entity, or create one.</p>}
         </div>
       </section>

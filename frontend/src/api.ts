@@ -1,6 +1,14 @@
 export type Persona = 'operator' | 'customer';
 export type Manageability = 'internal' | 'external';
-export type Propagation = { kind: 'inherited' } | { kind: 'copied'; till: string };
+export type Level = 'org' | 'merchant' | 'profile';
+export type Propagation = { kind: 'inherited' } | { kind: 'copied'; till: Level };
+
+export type Provenance =
+  | { kind: 'default' }
+  | { kind: 'own' }
+  | { kind: 'inherited'; fromPath: string[] }
+  | { kind: 'cohort'; cohort: string }
+  | { kind: 'killswitch' };
 
 export interface Feature {
   key: string;
@@ -14,7 +22,7 @@ export interface Feature {
 
 export interface FeatureView extends Omit<Feature, 'default'> {
   value: unknown;
-  provenance: { kind: string; fromPath?: string[]; cohort?: string };
+  provenance: Provenance;
   provenanceLabel: string;
 }
 
