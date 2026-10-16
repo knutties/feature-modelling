@@ -1,13 +1,20 @@
 import { useCallback, useEffect, useState } from 'react';
-import { type EntityNode, type Persona, getEntities } from './api.js';
+import { type EntityNode, type Feature, type Persona, getCatalog, getEntities } from './api.js';
+import { CohortPanel } from './CohortPanel.js';
 import { EntityFeatures } from './EntityFeatures.js';
 import { Hierarchy } from './Hierarchy.js';
+import { KillSwitchPanel } from './KillSwitchPanel.js';
+import { ResolverProbe } from './ResolverProbe.js';
 
 export function App() {
   const [persona, setPersona] = useState<Persona>('operator');
   const [tree, setTree] = useState<EntityNode[]>([]);
   const [selected, setSelected] = useState<string[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [catalog, setCatalog] = useState<{ features: Feature[]; cohorts: string[] }>({
+    features: [], cohorts: [],
+  });
+  const [version, setVersion] = useState(0);
 
   const refresh = useCallback(async () => {
     try {
@@ -21,6 +28,12 @@ export function App() {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    getCatalog(persona).then(setCatalog).catch((cause: unknown) =>
+      setError(cause instanceof Error ? cause.message : String(cause)),
+    );
+  }, [persona]);
 
   return (
     <main>
@@ -55,8 +68,24 @@ export function App() {
         />
         <div className="detail">
           {selected
-            ? <EntityFeatures path={selected} persona={persona} />
+            ? <EntityFeatures key={version} path={selected} persona={persona} />
             : <p className="hint">Select an entity, or create one.</p>}
+          <KillSwitchPanel
+            persona={persona}
+            features={catalog.features}
+            onChanged={() => setVersion((n) => n + 1)}
+          />
+          {selected && (
+            <>
+              <CohortPanel
+                path={selected}
+                persona={persona}
+                cohorts={catalog.cohorts}
+                features={catalog.features}
+              />
+              <ResolverProbe path={selected} persona={persona} />
+            </>
+          )}
         </div>
       </section>
     </main>
