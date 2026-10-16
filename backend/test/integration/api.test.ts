@@ -22,6 +22,7 @@ let server: ReturnType<Express['listen']>;
 let baseUrl: string;
 let cp: ControlPlane;
 let reader: ApplicationReader;
+let store: EntityStore;
 
 async function call(
   method: string, path: string, body?: unknown,
@@ -52,7 +53,7 @@ afterAll(async () => {
 beforeEach(async () => {
   await deleteAllContexts(cp);
   await bootstrap(cp);
-  const store = new EntityStore(join(mkdtempSync(join(tmpdir(), 'fm-')), 'entities.json'));
+  store = new EntityStore(join(mkdtempSync(join(tmpdir(), 'fm-')), 'entities.json'));
   app = createApp({
     controlPlane: cp,
     entities: store,
@@ -181,10 +182,80 @@ describe('entity features', () => {
       .toBe('platform default');
   });
 
-  it('explains one key as a timeline', async () => {
+  it('explains one key as a timeline, each step carrying its priority', async () => {
     await call('PUT', `/api/entities/acme~m1/features/${ROLLOUT}`, { value: 'shadow' });
     const { body } = await call('GET', `/api/entities/acme~m1/features/${ROLLOUT}/explain`);
     expect(body.timeline.at(-1).value_after).toBe('shadow');
+    expect(body.timeline.at(-1).weight).toBe(6);
+  });
+
+  /**
+   * The route's `customer_id` and `killswitch` parameters are what make the
+   * cohort context (30) and the kill-switch context (64) reachable from a
+   * screen at all; without them no timeline anywhere could show either.
+   */
+  it('includes the cohort step when the query names a customer', async () => {
+    await call('POST', '/api/entities', { path: 'acme~m1~p1', name: 'P1' });
+    await call(
+      'PUT', `/api/entities/acme~m1~p1/cohorts/gold/features/${THEME}`, { value: 'minimal' },
+    );
+
+    const plain = await call('GET', `/api/entities/acme~m1~p1/features/${THEME}/explain`);
+    expect(plain.body.timeline.some((t: any) => 'customer_cohort' in t.condition)).toBe(false);
+
+    const withCustomer = await call(
+      'GET', `/api/entities/acme~m1~p1/features/${THEME}/explain?customer_id=cust_001`,
+    );
+    expect(withCustomer.body.timeline.at(-1).condition.customer_cohort).toBe('gold');
+    expect(withCustomer.body.timeline.at(-1).weight).toBe(30);
+  });
+
+  it('includes the kill-switch step when the query previews it engaged', async () => {
+    await call('POST', `/api/killswitch/${THEME}`, { value: 'neo' });
+    const { body } = await call(
+      'GET', `/api/entities/acme~m1/features/${THEME}/explain?killswitch=true`,
+    );
+    expect(body.timeline.at(-1).condition).toEqual({ killswitch: true });
+    expect(body.timeline.at(-1).weight).toBe(64);
+    await call('DELETE', `/api/killswitch/${THEME}`);
+  });
+});
+
+/**
+ * `Provisioner.retry` and the `provisioning_failed` state both existed, and
+ * the state was reachable - but with no route and no button, an entity whose
+ * creation failed part-way could not be repaired through the product at all:
+ * re-creating it returns 409, so the only fix was editing the entity store by
+ * hand.
+ */
+describe('POST /api/entities/:path/retry', () => {
+  beforeEach(async () => {
+    await call('POST', '/api/entities', { path: 'acme', name: 'Acme' });
+  });
+
+  it('re-provisions an entity marked provisioning_failed', async () => {
+    store.setState(['acme'], 'provisioning_failed');
+    expect((await call('GET', '/api/entities')).body.tree[0].entity.provisioningState)
+      .toBe('provisioning_failed');
+
+    const { status, body } = await call('POST', '/api/entities/acme/retry');
+    expect(status).toBe(200);
+    expect(body.copied.map((c: any) => c.key).sort()).toEqual([
+      'external.copied_till_merchant.checkout_theme',
+      'internal.copied.connector_retry_budget',
+    ]);
+    expect((await call('GET', '/api/entities')).body.tree[0].entity.provisioningState).toBe('ok');
+  });
+
+  it('refuses to re-provision a healthy entity, which would unfreeze its copies', async () => {
+    const { status, body } = await call('POST', '/api/entities/acme/retry');
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/not awaiting retry/);
+  });
+
+  it('reports an unknown entity as a 400', async () => {
+    const { status } = await call('POST', '/api/entities/ghost/retry');
+    expect(status).toBe(400);
   });
 });
 
@@ -204,6 +275,27 @@ describe('kill switch and resolve', () => {
     expect(engaged.body.config[THEME]).toBe('minimal');
 
     expect((await call('DELETE', `/api/killswitch/${THEME}`)).status).toBe(204);
+  });
+
+  /**
+   * The engaged set is read from the live contexts, so the standing banner the
+   * spec asks for survives a reload and shows up in a second tab. Held in
+   * component state it did not, and the feature table cannot show it either -
+   * `viewFor` always resolves with `killswitch: false` - so an engaged
+   * emergency override was invisible.
+   */
+  it('lists the engaged kill switches from the live contexts', async () => {
+    expect((await call('GET', '/api/killswitch')).body.engaged).toEqual([]);
+
+    await call('POST', `/api/killswitch/${THEME}`, { value: 'minimal' });
+    expect((await call('GET', '/api/killswitch')).body.engaged).toEqual([THEME]);
+
+    await call('DELETE', `/api/killswitch/${THEME}`);
+    expect((await call('GET', '/api/killswitch')).body.engaged).toEqual([]);
+  });
+
+  it('refuses a customer listing the engaged kill switches with 403', async () => {
+    expect((await call('GET', '/api/killswitch?persona=customer')).status).toBe(403);
   });
 
   it('refuses a customer engaging it with 403', async () => {
