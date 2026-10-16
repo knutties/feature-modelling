@@ -44,6 +44,14 @@ const TTL_SECONDS = 1;
  * refresh (the `use_stale_on_error` case) leaves the previous good snapshot in
  * the native cache untouched, and the subsequent `resolveAllConfigDetails`
  * call below still serves it.
+ *
+ * A SECOND divergence, also verified by reading the compiled source:
+ * `SuperpositionProvider.resolveAllConfigDetails` swallows its own internal
+ * errors (not-ready status, or an exception from the native resolver) and
+ * returns the `defaultValue` we pass it - `{}` here - instead of throwing.
+ * The `catch` below is therefore effectively dead for that failure mode in
+ * this package version; an empty result is the only observable signal of it,
+ * which is why `resolveAll` treats an empty result as stale too.
  */
 export class ApplicationReader {
   private provider: SuperpositionProvider | undefined;
@@ -66,6 +74,16 @@ export class ApplicationReader {
     this.lastFetch = Date.now();
   }
 
+  /**
+   * `stale` is set in two places - here and in `refreshIfExpired` - and a
+   * read succeeding must never clear a flag the refresh set. A cache-hit
+   * read succeeding (the `use_stale_on_error` case: the forced refresh below
+   * just failed, but `resolveAllConfigDetails` happily serves the old
+   * snapshot anyway) is NOT evidence the data is fresh, so this method only
+   * ever SETS `stale` (on a thrown or empty result) and never clears it;
+   * only a successful refresh, in `refreshIfExpired`, legitimately clears
+   * staleness caused by a prior failed one.
+   */
   async resolveAll(context: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (!this.provider) throw new Error('ApplicationReader.init() was not awaited');
     await this.refreshIfExpired();
@@ -76,7 +94,11 @@ export class ApplicationReader {
       const resolved = await this.provider.resolveAllConfigDetails(
         {}, context as unknown as EvaluationContext,
       );
-      this.stale = false;
+      if (Object.keys(resolved).length === 0) {
+        // See the class doc's second divergence: this is the only signal of
+        // a provider-side failure on this call, since it does not throw.
+        this.stale = true;
+      }
       return resolved as Record<string, unknown>;
     } catch (error) {
       this.stale = true;
@@ -91,9 +113,12 @@ export class ApplicationReader {
     try {
       await this.provider.getConfigurationClient().initialize();
       this.lastFetch = Date.now();
+      this.stale = false;
     } catch {
       // use_stale_on_error: keep serving the last successfully fetched
-      // snapshot, which `initialize()` left untouched on this failure.
+      // snapshot, which `initialize()` left untouched on this failure - but
+      // flag it, since `resolveAllConfigDetails` below will otherwise appear
+      // to succeed against that now-possibly-outdated snapshot.
       this.stale = true;
     }
   }

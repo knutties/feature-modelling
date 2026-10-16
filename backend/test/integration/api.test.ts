@@ -158,12 +158,18 @@ describe('entity features', () => {
   });
 
   it("surfaces a schema violation with 400 and Superposition's own message", async () => {
+    // internal.copied.connector_retry_budget's schema caps at 10 (see
+    // schema.ts); 99 violates it. Asserted against the bound itself, not
+    // merely "some non-empty string", so a generic "Bad Request" placeholder
+    // would fail this test - confirmed against the live instance, which
+    // replies "schema validation failed for
+    // internal.copied.connector_retry_budget: value is too large, maximum is 10".
     const { status, body } = await call(
       'PUT', '/api/entities/acme~m1/features/internal.copied.connector_retry_budget',
       { value: 99 },
     );
     expect(status).toBe(400);
-    expect(String(body.error).length).toBeGreaterThan(0);
+    expect(String(body.error)).toMatch(/maximum is 10/);
   });
 
   it('reverts a value', async () => {
@@ -189,6 +195,11 @@ describe('kill switch and resolve', () => {
 
   it('engages and disengages for an operator', async () => {
     expect((await call('POST', `/api/killswitch/${THEME}`, { value: 'minimal' })).status).toBe(204);
+    // /api/resolve reads through the provider, whose on-demand ttl is 1s; wait
+    // for the write to become visible rather than relying on incidental
+    // wall-clock time elapsed earlier in a full-suite run (true only there,
+    // not when this test runs alone).
+    await new Promise((resolve) => setTimeout(resolve, 1500));
     const engaged = await call('GET', '/api/resolve?path=acme&customer_id=cust_001&killswitch=true');
     expect(engaged.body.config[THEME]).toBe('minimal');
 

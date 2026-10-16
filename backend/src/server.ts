@@ -20,17 +20,34 @@ export interface Deps {
 }
 
 /**
+ * Superposition's OWN validation failures (a schema violation, say) arrive
+ * as a generic SDK service exception, not one of our domain error classes
+ * below - but the SDK still carries the real HTTP status it got back on
+ * `$metadata.httpStatusCode` (the same signal `controlPlane.ts`'s own
+ * `httpStatus` helper reads, for the same reason: the live server's errors
+ * do not carry a usable discriminator otherwise). A 4xx there is a genuine
+ * client error Superposition itself raised and should reach the client
+ * verbatim, not collapse to 500 just because it is not one of our classes.
+ */
+function sdkStatus(error: unknown): number | undefined {
+  return (error as { $metadata?: { httpStatusCode?: number } } | null | undefined)
+    ?.$metadata?.httpStatusCode;
+}
+
+/**
  * Map a thrown error to the status code it carries. Status is STRUCTURAL -
- * each error class carries its own `status`, set by the throw site (see
- * `PersonaError`, `ProvisionError`, `FeatureError`) - rather than guessed
- * here from the error's message text. Deriving status from prose meant a
- * message edit could silently change a response code, and - worse - any
- * error this function did not recognize fell through to 400, so a genuine
- * server-side failure (Superposition unreachable, the provider crashing, an
- * unanticipated exception) was reported to the client as "Bad Request"
- * rather than the 500 it actually is. `HierarchyError`/`FeatureKeyError` have
- * no variability to carry (every throw site means the same thing - a
- * malformed path or key) and are left as plain `Error` subclasses.
+ * each of our own error classes carries its own `status`, set by the throw
+ * site (see `PersonaError`, `ProvisionError`, `FeatureError`) - rather than
+ * guessed here from the error's message text. Deriving status from prose
+ * meant a message edit could silently change a response code, and - worse -
+ * any error this function did not recognize fell through to 400, so a
+ * genuine server-side failure (Superposition unreachable, the provider
+ * crashing, an unanticipated exception) was reported to the client as "Bad
+ * Request" rather than the 500 it actually is. `HierarchyError`/
+ * `FeatureKeyError` have no variability to carry (every throw site means the
+ * same thing - a malformed path or key) and are left as plain `Error`
+ * subclasses, always 400. Only an error this function cannot place at all -
+ * neither ours nor Superposition's own 4xx - becomes the 500 it is.
  */
 function statusFor(error: unknown): number {
   if (error instanceof HierarchyError || error instanceof FeatureKeyError) return 400;
@@ -41,6 +58,8 @@ function statusFor(error: unknown): number {
   ) {
     return error.status;
   }
+  const status = sdkStatus(error);
+  if (typeof status === 'number' && status >= 400 && status < 500) return status;
   return 500;
 }
 
