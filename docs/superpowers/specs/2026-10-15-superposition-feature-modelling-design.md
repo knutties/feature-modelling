@@ -404,6 +404,14 @@ being honored. But if only the UI hid internal features, the claim that customer
 gap between what it claims and what the code does. Pushing the filter down to the
 resolve call closes it for the cost of one query parameter.
 
+One route cannot take that push-down, and the distinction is worth stating rather
+than glossing: `/api/resolve` reads through the provider, whose
+`resolveAllConfigDetails` accepts no prefix parameter and caches the whole config
+in-process regardless, so a customer's filter is applied to the provider's result
+instead of inside the query. The response-level guarantee is identical and is
+tested against the response; what is not available on that path is the structural
+claim, and it is not available because the provider's API does not offer it.
+
 ### Frontend
 
 Vite + React. A persona toggle (Operator / Customer) is the top-level control, so
@@ -446,7 +454,13 @@ Test-driven, per the project workflow. Two tiers.
   timeline whose last two steps carry equal values, where the label must still come
   from the condition and not from the value
 - persona filtering, both read and write, including that `customer` maps to
-  `prefix=external.` and never to a post-hoc filter
+  `prefix=external.` and never to a post-hoc filter on the management read
+  path. The structural push-down covers the management reads that go through
+  `GetResolvedConfig`; the provider path behind `/api/resolve` filters
+  in-process instead, because `resolveAllConfigDetails` accepts no prefix
+  parameter and the provider caches the whole config locally regardless, so
+  there the guarantee is asserted against the response rather than against the
+  query
 
 **Integration, against the live instance** in a dedicated workspace
 `featuredemotest` (Task 5 found that `featuredemo_test` is rejected: the live

@@ -80,10 +80,42 @@ management view of the underlying value, not the customer-facing one — so
 engaging the kill switch does not change what you see there. To see it take
 effect, resolve with `killswitch=true` through the resolver probe (or
 `GET /api/resolve?...&killswitch=true`), which is the only path that honors it.
+Because the table cannot show it, the banner that says a switch is engaged is
+read back from the live contexts (`GET /api/killswitch`) rather than remembered
+in the browser — so it survives a reload and appears in a second tab.
+
+**The resolver probe is the payoff.** Resolve, then expand any key with
+*why?*: the timeline is every context that applied, in order, each with its
+condition, **its priority** and the value before and after it. The priority
+column is the arithmetic above deciding outcomes, taken from the resolver's own
+explanation rather than from this README. The timeline explains *that* read, so
+the two highest-weight rows of the cascade are observable only here: resolve
+`acme/m1/p1` as `cust_001` and the cohort context shows up at priority 30; tick
+*preview with kill switch engaged* and the kill-switch context shows up at 64,
+above every entity row. The feature table's own *why?* asks for neither, by
+design — it explains the entity as configured.
+
+(`GetResolvedConfigExplanation` returns no priority field; the backend computes
+it with the same Σ2^position the server uses, and an integration test pins the
+two against each other on live contexts.)
+
+**A failed creation is recoverable.** Provisioning an entity is several context
+writes and is not atomic; a part-way failure marks the entity
+`provisioning_failed` and the tree shows a `!` with a **Retry** button beside
+it (`POST /api/entities/:path/retry`). Retry is safe because the writes merge,
+so re-writing a copy that already landed is a no-op; re-provisioning a *healthy*
+entity is refused, because that would re-resolve the parent and unfreeze a
+copied feature through the back door.
 
 **Persona.** The toggle is not cosmetic: a customer read passes
 `prefix=external.` to `GetResolvedConfig`, so internal keys are never returned.
-Not RBAC — the declaration in the key, honored server-side.
+That structural push-down covers the management reads; the customer-facing
+`/api/resolve` is the one exception, and necessarily so — it reads through the
+provider, whose `resolveAllConfigDetails` takes no prefix parameter and caches
+the whole config in-process anyway, so there the filter is applied to the
+provider's result. The response guarantee is the same on both paths and is
+tested against the response. Not RBAC — the declaration in the key, honored
+server-side.
 
 **Two things Superposition's own docs get wrong or omit**, found by probing the
 running instance rather than reading about it:
@@ -115,20 +147,21 @@ The integration suite asserts what the model claims: copies land at the right
 levels and nowhere else, an org edit moves inherited and not copied features,
 the merchant boundary reaches profiles for one feature and not the other, a
 cohort beats a profile, the kill switch beats everything. It also asserts the
-priority arithmetic (14 > 6 > 2, 30 > 14, 64 > 62), because that ordering is
-load-bearing and invisible — a dimension added later at a careless position
-would break inheritance while every other test still passed.
+priority arithmetic (14 > 6 > 2, 30 > 14, 64 > 62) against the weights
+*Superposition itself* computed and stored for live contexts, because that
+ordering is load-bearing and invisible — a dimension added later at a careless
+position, or an upgrade that changed the weighting, would break inheritance
+while every unit test still passed.
 
 Integration tests share the `featuredemotest` workspace (not
 `featuredemo_test` — the live server rejects underscores in a workspace name)
 and clean it at the *start* of each run, since Superposition has no
 `DeleteWorkspace` operation; a crashed run therefore cannot poison the next.
 
-The suite's `console.error` output is not pristine: the server logs every
-caught error unconditionally, including the 400/403/409s that the error-path
-tests deliberately trigger, so a clean integration run still prints a page of
-stack traces. That's a known, deferred one-line fix (only log 5xx), not a sign
-of a failing test — check the PASS/FAIL summary, not the log noise above it.
+The server logs only 5xx responses, so a clean integration run is quiet: the
+400/403/409s the error-path tests deliberately trigger are the API working as
+designed and are reported in the response, not the log. A stack trace during a
+test run therefore means something genuinely went wrong server-side.
 
 ## Out of scope
 
