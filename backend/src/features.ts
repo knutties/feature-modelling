@@ -149,21 +149,11 @@ export class FeatureService {
   }
 
   /**
-   * Drop this entity's own value so the feature inherits again. Needs a
-   * replace rather than a write, because every write API merges and so cannot
-   * remove a key.
+   * Drop this entity's own value so the feature inherits again.
    */
   async revert(path: EntityPath, key: string, persona: Persona): Promise<void> {
     await this.entry(key, persona);
-    const condition = pathToCondition(path);
-    const existing = await this.controlPlane.getContext(condition);
-    if (!existing || !(key in existing.override)) return;
-
-    const remaining = { ...existing.override };
-    delete remaining[key];
-    await this.controlPlane.replaceContextOverrides(
-      condition, remaining, `revert ${key} on ${path.join('/')}`,
-    );
+    await this.removeKey(pathToCondition(path), key, `revert ${key} on ${path.join('/')}`);
   }
 
   /** Specialize a feature for a cohort beneath an entity. Weight 30 beats the entity's 14. */
@@ -207,14 +197,28 @@ export class FeatureService {
       throw new FeatureError('only an operator may disengage the kill switch');
     }
     await this.entry(key, persona);
-    const existing = await this.controlPlane.getContext(KILLSWITCH_CONDITION);
+    await this.removeKey(KILLSWITCH_CONDITION, key, `kill switch off ${key}`);
+  }
+
+  /**
+   * Remove one key from a context's overrides, deleting the context outright
+   * if that key was its last. The only way to shrink an override set: every
+   * write API merges, so neither CreateContext nor UpdateOverride can remove
+   * a key - `revert` and `disengageKillSwitch` are the only two operations
+   * that shrink an override set, and both go through this one path so a
+   * future guard added to one cannot silently miss the other.
+   */
+  private async removeKey(
+    condition: Record<string, unknown>,
+    key: string,
+    changeReason: string,
+  ): Promise<void> {
+    const existing = await this.controlPlane.getContext(condition);
     if (!existing || !(key in existing.override)) return;
 
     const remaining = { ...existing.override };
     delete remaining[key];
-    await this.controlPlane.replaceContextOverrides(
-      KILLSWITCH_CONDITION, remaining, `kill switch off ${key}`,
-    );
+    await this.controlPlane.replaceContextOverrides(condition, remaining, changeReason);
   }
 
   /**
