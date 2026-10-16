@@ -259,11 +259,23 @@ it mirrors how this would be built for real.
 **The provider** (`readPath.ts`) is the *application* read path: OpenFeature,
 in-process cache, exactly what a service like Hyperswitch would embed. WHAT.md
 requires the demo use it, and the resolver-probe screen is driven by it so what the
-viewer sees is genuinely what an application would see. It is configured with the
-on-demand refresh strategy at `ttl: 1` second rather than polling, so a write is
-visible on the next read and the demo never shows a stale value, with
-`use_stale_on_error: true` so reads degrade rather than fail when Superposition is
-unreachable.
+viewer sees is genuinely what an application would see.
+
+**The provider's documented on-demand refresh strategy does not work on the config
+path**, which Task 10 found and verified two ways: by reading the compiled package and
+by probing the live instance. `superposition-provider@0.118.2` accepts
+`refreshStrategy: { ttl, use_stale_on_error }` in its options type, but no `ttl`
+identifier appears anywhere in its compiled output — `ConfigurationClient` carries only
+a `private refreshInterval`, so the config path refreshes on `interval` (polling) or
+never. The option is silently inert, and a demo relying on it would show stale values
+indefinitely while appearing correctly configured.
+
+`ApplicationReader` therefore implements on-demand semantics itself: when the ttl has
+elapsed it forces a refetch through the provider's own public
+`getConfigurationClient().initialize()`, which keeps a write visible on the next read
+(measured at roughly 1.5s) and preserves the `use_stale_on_error` intent, since a failed
+refetch leaves the previous good snapshot in place. Both of those methods are public on
+the published types, not reached-into internals.
 
 **The control plane** (`controlPlane.ts`) serves *management* reads, where
 authority matters more than speed: resolving a parent's value when materializing a
@@ -291,6 +303,28 @@ path and reads provenance off the last item in the timeline: if its condition na
 the entity's own full path, the value is *own*; if it names a proper ancestor prefix,
 the value is *inherited from* that ancestor; if the timeline is empty, the value is
 the *platform default*.
+
+**The timeline must be filtered first, and this is not optional.** Task 9 found,
+against the live server, that the explanation includes a step for *every* context
+whose condition matches the resolution query — whether or not that context's override
+actually names the explained key. A non-owning context appears as a pass-through step
+with `value_after` equal to `value_before`
+(`crates/context_aware_config/src/api/config/helpers.rs` pushes a step per matching
+context unconditionally). So an entity that owns some *other* copied feature emits a
+trailing pass-through step for keys it does not own, and reading the last step
+naively reports that entity as the owner. Concretely: a profile owning
+`connector_retry_budget` was reported as owning `checkout_theme` too, when it
+inherits it from its merchant — wrong in exactly the merchant-boundary case this demo
+exists to show.
+
+The filter cannot key off `value_before === value_after`, because a genuine owner may
+set the same value its parent already had — the equal-values case above. The only
+sound discriminator is whether the context's override *names the key*, which requires
+the override map rather than the timeline alone. The backend therefore cross-checks
+each step's `context_id` against the live contexts' overrides and passes only genuine
+owners to `provenanceOf`. The filter is applied both to the provenance computation and
+to the timeline the UI displays, so the "why?" panel never shows a context that did
+not participate. The override map is fetched once per page rather than per feature.
 
 Deriving provenance from the resolver's own explanation rather than reimplementing
 the cascade matters twice over. It cannot drift from the real resolution logic, which
@@ -370,6 +404,14 @@ being honored. But if only the UI hid internal features, the claim that customer
 gap between what it claims and what the code does. Pushing the filter down to the
 resolve call closes it for the cost of one query parameter.
 
+One route cannot take that push-down, and the distinction is worth stating rather
+than glossing: `/api/resolve` reads through the provider, whose
+`resolveAllConfigDetails` accepts no prefix parameter and caches the whole config
+in-process regardless, so a customer's filter is applied to the provider's result
+instead of inside the query. The response-level guarantee is identical and is
+tested against the response; what is not available on that path is the structural
+claim, and it is not available because the provider's API does not offer it.
+
 ### Frontend
 
 Vite + React. A persona toggle (Operator / Customer) is the top-level control, so
@@ -412,10 +454,20 @@ Test-driven, per the project workflow. Two tiers.
   timeline whose last two steps carry equal values, where the label must still come
   from the condition and not from the value
 - persona filtering, both read and write, including that `customer` maps to
-  `prefix=external.` and never to a post-hoc filter
+  `prefix=external.` and never to a post-hoc filter on the management read
+  path. The structural push-down covers the management reads that go through
+  `GetResolvedConfig`; the provider path behind `/api/resolve` filters
+  in-process instead, because `resolveAllConfigDetails` accepts no prefix
+  parameter and the provider caches the whole config locally regardless, so
+  there the guarantee is asserted against the response rather than against the
+  query
 
 **Integration, against the live instance** in a dedicated workspace
-`featuredemo_test`. Superposition has no `DeleteWorkspace` operation, so the
+`featuredemotest` (Task 5 found that `featuredemo_test` is rejected: the live
+server validates workspace names against `^[a-zA-Z0-9]+$`, so underscores and
+hyphens 400; always reference this name through `TEST_WORKSPACE` from
+`test/helpers/workspace.ts` rather than retyping it). Superposition has no
+`DeleteWorkspace` operation, so the
 workspace cannot be dropped; instead it is created once if absent and **cleaned
 at the start of every run**. Cleaning at the start rather than the end is what
 keeps the intent — a crashed run cannot poison a later one — without
@@ -467,13 +519,17 @@ Superposition organisations or workspaces beyond the one.
 
 ## Open implementation details
 
-1. Whether `ContextAction::REPLACE` shrinks an override set in one action, which
-   would simplify the revert path. Settle with an integration test; the
-   specified DELETE+PUT form works either way.
+1. Settled by Task 5's integration test: DELETE+PUT via `BulkOperationCommand`
+   is confirmed working for shrinking an override set, so no further change is
+   needed.
 2. Whether `featuredemo` needs `mandatory_dimensions`. Default to none; the existing
    nine workspaces set none, and a mandatory dimension would force every context to
    name it.
-3. Whether the paginated list operations (`ListDefaultConfigs`, `ListDimensions`,
-   `ListContexts`) take `all: true` or require `count`/`page`. The adapter assumes
-   `all: true`; this is the one SDK detail not verified against the client before
-   implementation.
+3. Settled by Task 5: `all: true` is accepted by `ListDefaultConfigs`,
+   `ListDimensions` and `ListContexts` against the live instance - no switch to
+   `count`/`page` pagination was needed.
+4. Also found by Task 5, not anticipated by this spec: `CreateContext` (and the
+   `PUT` branch of `BulkOperation`) returns 400 "Description is required when
+   context does not exist" unless `description` is set on a brand-new context -
+   it is only optional when the condition already has a context. The adapter
+   sets `description` to the same string as `change_reason`.

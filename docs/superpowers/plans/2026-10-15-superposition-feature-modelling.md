@@ -12,14 +12,15 @@
 
 ## Global Constraints
 
-- Superposition endpoint `http://localhost:8080`; org `localorg`; demo workspace `featuredemo`; integration-test workspace `featuredemo_test`.
+- Superposition endpoint `http://localhost:8080`; org `localorg`; demo workspace `featuredemo`; integration-test workspace `featuredemotest` (no underscore - see the charset note below).
 - Auth is permissive locally. The SDK client takes `token: { token: "some-token" }` — a nested object, not a bare string.
 - npm package names are `superposition-sdk` and `superposition-provider` (**not** `@juspay/...`, which is the in-repo name only). Both at `0.118.2`.
 - Config keys must match `^[a-zA-Z0-9-_]([a-zA-Z0-9-_.]{0,254}[a-zA-Z0-9-_])?$`. No `@`, no leading/trailing dot.
-- Dimension positions are exactly: `org` 1, `merchant` 2, `profile` 3, `customer_cohort` 4, `customer_id` 5, `killswitch` 6. Priority is Σ2^position; these values are load-bearing and must not be changed casually.
+- Dimension positions must END UP exactly: `org` 1, `merchant` 2, `profile` 3, `customer_cohort` 4, `customer_id` 5, `killswitch` 6. Priority is Σ2^position; these values are load-bearing and must not be changed casually.
+- **`position` is an insertion index, not a declaration** (found by Task 6 against the live server, not anticipated by this plan): a new dimension's position must be ≤ the current dimension count, and the server SHIFTS existing dimensions at or above that position up by one on insert. Creating dimensions in naive array order therefore does not produce the positions above. Additionally, a `LOCAL_COHORT` dimension's parent must already exist when the cohort is created — which conflicts with insertion order, since `customer_cohort` (4) precedes its parent `customer_id` (5). Bootstrap resolves this by creating cohort parents first, then the remaining dimensions in ascending target-position order, letting shift-on-insert carry the parent to its final slot. Because the final layout depends on insertion order and on the workspace's starting state, bootstrap must VERIFY the resulting positions and fail loudly if any differ — a silently wrong position breaks inheritance everywhere with no other symptom.
 - A cohort dimension's position must be ≤ its parent's. `customer_cohort` (4) ≤ `customer_id` (5).
 - A local cohort's `schema.enum` must include `"otherwise"`.
-- Workspace names: ≤25 chars, `[a-zA-Z0-9_-]`, must not start with a digit.
+- Workspace names: ≤25 chars, **letters and digits only** (`^[a-zA-Z0-9]+$`), must not start with a digit. Superposition's own docs claim underscores and hyphens are allowed; they are not - the live server rejects them with "the workspace name can only contain letters and numbers". Verified directly. Always reference the test workspace through `TEST_WORKSPACE` rather than retyping the name.
 - The provider is configured `{ ttl: 1, use_stale_on_error: true }` (on-demand refresh, not polling).
 - Never read or write the nine pre-existing workspaces in `localorg` (`sdkv2`, `sdkv2itest`, `crt`, `mirror`, `shopconfig`, `a`, `tmp`, `dev`, `test`).
 - Every Superposition write requires a non-empty `change_reason`.
@@ -30,7 +31,7 @@
 Two spec statements proved wrong against the API and are corrected in this plan:
 
 1. **Setting a key is one call, not three.** The spec specifies `GetContextFromCondition` → `UpdateOverride`-or-`CreateContext`. But `CreateContext` is `@idempotent` and merges on an existing condition (`handlers.rs:162-169` passes `replace: false`), so a single `CreateContext` creates-or-merges. Tasks 9 and 10 use the one-call form.
-2. **Workspaces cannot be deleted.** There is no `DeleteWorkspace` operation. The spec's "created and dropped per run" is impossible. Instead `featuredemo_test` is created once if absent and **cleaned at the start of every run** (delete all contexts, then re-run bootstrap, which resets default-config values). Cleaning at start rather than end preserves the spec's intent — a crashed run cannot poison the next one — without accumulating workspaces.
+2. **Workspaces cannot be deleted.** There is no `DeleteWorkspace` operation. The spec's "created and dropped per run" is impossible. Instead `featuredemotest` is created once if absent and **cleaned at the start of every run** (delete all contexts, then re-run bootstrap, which resets default-config values). Cleaning at start rather than end preserves the spec's intent — a crashed run cannot poison the next one — without accumulating workspaces.
 
 ## Review Focus
 
@@ -459,6 +460,11 @@ describe('priority arithmetic', () => {
   it('ignores keys that are not dimensions', () => {
     expect(weightOf({ org: 'a', nonsense: 'x' })).toBe(2);
   });
+
+  it('ignores inherited Object.prototype keys rather than yielding NaN', () => {
+    expect(weightOf({ org: 'a', toString: 'x' })).toBe(2);
+    expect(weightOf({ constructor: 'x' })).toBe(0);
+  });
 });
 ```
 
@@ -496,7 +502,11 @@ export const DIMENSION_POSITIONS = {
 export type DimensionName = keyof typeof DIMENSION_POSITIONS;
 
 function isDimensionName(name: string): name is DimensionName {
-  return name in DIMENSION_POSITIONS;
+  // Object.hasOwn, not `in`: `in` also matches Object.prototype keys, so a
+  // condition carrying `toString` or `constructor` would index a function,
+  // making the weight NaN - and NaN compares false against every other weight,
+  // breaking precedence silently instead of loudly.
+  return Object.hasOwn(DIMENSION_POSITIONS, name);
 }
 
 /** The weight Superposition will give a context naming these dimensions. */
@@ -1491,7 +1501,7 @@ export { ensureWorkspace } from '../../src/superposition/workspace.js';
  * drop their workspace. Instead one fixed workspace is reused and cleaned at
  * the START of each run - a crashed run therefore cannot poison the next.
  */
-export const TEST_WORKSPACE = 'featuredemo_test';
+export const TEST_WORKSPACE = 'featuredemotest';
 
 /**
  * Deleting contexts is enough of a reset: bootstrap is idempotent and rewrites
@@ -2618,6 +2628,20 @@ describe('retry', () => {
     expect(after!.override).toEqual(before!.override);
     expect(store.get(['acme'])?.provisioningState).toBe('ok');
   });
+
+  // Without the state guard, retry on a healthy entity re-resolves the parent's
+  // CURRENT value and merges it over the frozen copy - unfreezing a copied
+  // feature through the back door.
+  it('refuses to re-provision a healthy entity, leaving its frozen copy intact', async () => {
+    await provisioner.createEntity({ path: ['acme'], name: 'Acme' });
+    await provisioner.createEntity({ path: ['acme', 'm1'], name: 'M1' });
+    await cp.putContext({ org: 'acme' }, { [BUDGET]: 9 }, 'org edit after the freeze');
+
+    await expect(provisioner.retry(['acme', 'm1'])).rejects.toThrow(/not awaiting retry/);
+
+    const context = await cp.getContext({ org: 'acme', merchant: 'm1' });
+    expect(context!.override[BUDGET]).toBe(3);
+  });
 });
 ```
 
@@ -2711,13 +2735,26 @@ export class Provisioner {
   }
 
   /**
-   * Re-run provisioning for an entity. Safe to repeat: each copy is written
-   * with CreateContext, which merges, so re-writing a copy that already landed
-   * changes nothing.
+   * Re-run provisioning for an entity whose first attempt FAILED.
+   *
+   * Guarded to `provisioning_failed` deliberately. Re-running against an entity
+   * that already provisioned would re-resolve the parent's CURRENT value and
+   * merge it over the frozen copy - so if the parent moved in the meantime,
+   * retry would silently unfreeze a copied feature, which is the one thing a
+   * copied feature exists to prevent. CreateContext's merge makes a retry
+   * harmless only when the parent has not changed, and that is not something
+   * this method can assume.
    */
   async retry(path: EntityPath): Promise<CreateEntityResult> {
     const entity = this.store.get(path);
     if (!entity) throw new ProvisionError(`no entity at ${encodePath(path)}`);
+    if (entity.provisioningState !== 'provisioning_failed') {
+      throw new ProvisionError(
+        `${encodePath(path)} is not awaiting retry (state: ${entity.provisioningState}); ` +
+          `re-provisioning a healthy entity would overwrite its frozen copies with the ` +
+          `parent's current values`,
+      );
+    }
     const { copied, skipped } = await this.materializeCopies(path);
     this.store.setState(path, 'ok');
     return { entity, copied, skipped };
@@ -3330,6 +3367,14 @@ exactly."
 
 ### Task 10: Provider read path and HTTP API
 
+**Corrections applied after Task 10's review** (all five were defects in this plan's own text, found against the running code):
+
+1. Each error class carries its own `status`, set at the throw site, and `statusFor` reads it — see the rewritten `statusFor` below. `PersonaError` defaults to 403 with `parsePersona`'s unknown-value throw passing 400; `ProvisionError` defaults to 400 with the duplicate throw passing 409; `FeatureError` defaults to 400 with the operator-only throws passing 403; `HierarchyError` and `FeatureKeyError` are 400. This means Tasks 2, 8 and 9's error classes gain a `status` constructor parameter.
+2. `statusFor` defaults to **500**, and `handle()` logs before responding.
+3. The schema-violation test asserts something only Superposition's real message satisfies, not merely a non-empty string.
+4. `readPath.test.ts` needs a `beforeEach` resetting state (`deleteAllContexts` + `bootstrap`) — as originally written its tests depended on each other's writes and could not run in isolation.
+5. The kill-switch API test needs the same explicit TTL wait the `readPath` tests use; without it, it relies on incidental elapsed wall-clock time to see its own write.
+
 **Files:**
 - Create: `backend/src/superposition/readPath.ts`, `backend/src/server.ts`
 - Test: `backend/test/integration/readPath.test.ts`, `backend/test/integration/api.test.ts`
@@ -3641,7 +3686,10 @@ describe('entity features', () => {
       { value: 99 },
     );
     expect(status).toBe(400);
-    expect(String(body.error).length).toBeGreaterThan(0);
+    // Specific enough to fail if the message were replaced by a generic one -
+    // asserting only that the string is non-empty would pass against a
+    // hardcoded "Bad Request", which is what this test exists to rule out.
+    expect(String(body.error)).toMatch(/10|maximum|schema|validat/i);
   });
 
   it('reverts a value', async () => {
@@ -3722,18 +3770,26 @@ export interface Deps {
 }
 
 /**
- * Map a thrown error to a status code. Superposition's validation messages are
- * passed through unaltered: type and range enforcement is a feature of the
- * platform worth showing, and a generic "bad request" would hide it.
+ * Map a thrown error to a status code.
+ *
+ * Each error class CARRIES its status, set at the throw site, rather than
+ * having one inferred here by matching its message. Message-matching was the
+ * original design and it was wrong twice over: the status of the HTTP contract
+ * the frontend is built against would rest on prose, so rewording an error for
+ * clarity would silently flip a status code with no compiler error; and these
+ * messages are written in this same codebase, so nothing external would ever
+ * force the mismatch to the surface.
+ *
+ * The default is 500, not 400. An error this layer does not recognise is a
+ * server problem - a Superposition outage, a provider crash, a bug - and
+ * reporting it as "Bad Request" would blame the caller for our failure.
+ *
+ * Superposition's own validation messages still pass through unaltered: type
+ * and range enforcement is a platform feature worth showing off.
  */
 function statusFor(error: unknown): number {
-  if (error instanceof PersonaError) return 403;
-  if (error instanceof ProvisionError) return /exists/i.test(error.message) ? 409 : 400;
-  if (error instanceof HierarchyError || error instanceof FeatureKeyError) return 400;
-  if (error instanceof FeatureError) {
-    return /only an operator/i.test(error.message) ? 403 : 400;
-  }
-  return 400;
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? status : 500;
 }
 
 function handle(fn: (req: Request, res: Response) => Promise<void>) {
@@ -3742,7 +3798,11 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
       await fn(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      res.status(statusFor(error)).json({ error: message });
+      const status = statusFor(error);
+      // Log before responding: an unexpected exception must not be visible only
+      // in the HTTP response body.
+      if (status >= 500) console.error(`${req.method} ${req.path} failed:`, error);
+      res.status(status).json({ error: message });
     }
   };
 }
@@ -5279,7 +5339,7 @@ priority arithmetic (14 > 6 > 2, 30 > 14, 64 > 62), because that ordering is
 load-bearing and invisible — a dimension added later at a careless position
 would break inheritance while every other test still passed.
 
-Integration tests share the `featuredemo_test` workspace and clean it at the
+Integration tests share the `featuredemotest` workspace and clean it at the
 *start* of each run, since Superposition has no `DeleteWorkspace` operation; a
 crashed run therefore cannot poison the next.
 
