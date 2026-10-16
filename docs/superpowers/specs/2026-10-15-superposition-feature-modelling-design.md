@@ -259,11 +259,23 @@ it mirrors how this would be built for real.
 **The provider** (`readPath.ts`) is the *application* read path: OpenFeature,
 in-process cache, exactly what a service like Hyperswitch would embed. WHAT.md
 requires the demo use it, and the resolver-probe screen is driven by it so what the
-viewer sees is genuinely what an application would see. It is configured with the
-on-demand refresh strategy at `ttl: 1` second rather than polling, so a write is
-visible on the next read and the demo never shows a stale value, with
-`use_stale_on_error: true` so reads degrade rather than fail when Superposition is
-unreachable.
+viewer sees is genuinely what an application would see.
+
+**The provider's documented on-demand refresh strategy does not work on the config
+path**, which Task 10 found and verified two ways: by reading the compiled package and
+by probing the live instance. `superposition-provider@0.118.2` accepts
+`refreshStrategy: { ttl, use_stale_on_error }` in its options type, but no `ttl`
+identifier appears anywhere in its compiled output — `ConfigurationClient` carries only
+a `private refreshInterval`, so the config path refreshes on `interval` (polling) or
+never. The option is silently inert, and a demo relying on it would show stale values
+indefinitely while appearing correctly configured.
+
+`ApplicationReader` therefore implements on-demand semantics itself: when the ttl has
+elapsed it forces a refetch through the provider's own public
+`getConfigurationClient().initialize()`, which keeps a write visible on the next read
+(measured at roughly 1.5s) and preserves the `use_stale_on_error` intent, since a failed
+refetch leaves the previous good snapshot in place. Both of those methods are public on
+the published types, not reached-into internals.
 
 **The control plane** (`controlPlane.ts`) serves *management* reads, where
 authority matters more than speed: resolving a parent's value when materializing a
