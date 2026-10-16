@@ -20,25 +20,28 @@ export interface Deps {
 }
 
 /**
- * Map a thrown error to a status code. Superposition's validation messages are
- * passed through unaltered: type and range enforcement is a feature of the
- * platform worth showing, and a generic "bad request" would hide it.
- *
- * `PersonaError` covers two distinct failures with one class: `parsePersona`
- * throws it for a persona VALUE that is not even a known persona (a bad
- * request - there is no such role to be forbidden from), while
- * `assertCanManage` throws it for a known persona attempting something it is
- * not permitted (genuinely forbidden). The two are told apart by message,
- * the same pattern already used below for `ProvisionError` and `FeatureError`.
+ * Map a thrown error to the status code it carries. Status is STRUCTURAL -
+ * each error class carries its own `status`, set by the throw site (see
+ * `PersonaError`, `ProvisionError`, `FeatureError`) - rather than guessed
+ * here from the error's message text. Deriving status from prose meant a
+ * message edit could silently change a response code, and - worse - any
+ * error this function did not recognize fell through to 400, so a genuine
+ * server-side failure (Superposition unreachable, the provider crashing, an
+ * unanticipated exception) was reported to the client as "Bad Request"
+ * rather than the 500 it actually is. `HierarchyError`/`FeatureKeyError` have
+ * no variability to carry (every throw site means the same thing - a
+ * malformed path or key) and are left as plain `Error` subclasses.
  */
 function statusFor(error: unknown): number {
-  if (error instanceof PersonaError) return /^unknown persona/.test(error.message) ? 400 : 403;
-  if (error instanceof ProvisionError) return /exists/i.test(error.message) ? 409 : 400;
   if (error instanceof HierarchyError || error instanceof FeatureKeyError) return 400;
-  if (error instanceof FeatureError) {
-    return /only an operator/i.test(error.message) ? 403 : 400;
+  if (
+    error instanceof PersonaError ||
+    error instanceof ProvisionError ||
+    error instanceof FeatureError
+  ) {
+    return error.status;
   }
-  return 400;
+  return 500;
 }
 
 function handle(fn: (req: Request, res: Response) => Promise<void>) {
@@ -46,6 +49,9 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
     try {
       await fn(req, res);
     } catch (error) {
+      // Logged unconditionally so an unexpected failure is visible server
+      // side too, not only in the HTTP response body the client sees.
+      console.error(error);
       const message = error instanceof Error ? error.message : String(error);
       res.status(statusFor(error)).json({ error: message });
     }

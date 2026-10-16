@@ -6,10 +6,18 @@ import {
 import { planCopies, shouldCopy } from './model/provisioning.js';
 import type { ControlPlane } from './superposition/controlPlane.js';
 
+/**
+ * The HTTP status this error carries is set at the throw site, not guessed
+ * later from the message: every validation failure here is a 400 except
+ * "already exists" (409), which `createEntity` passes explicitly below.
+ */
 export class ProvisionError extends Error {
-  constructor(message: string) {
+  readonly status: number;
+
+  constructor(message: string, status = 400) {
     super(message);
     this.name = 'ProvisionError';
+    this.status = status;
   }
 }
 
@@ -54,7 +62,7 @@ export class Provisioner {
     levelOf(path); // throws if deeper than the hierarchy
 
     if (this.store.exists(path)) {
-      throw new ProvisionError(`entity ${encodePath(path)} already exists`);
+      throw new ProvisionError(`entity ${encodePath(path)} already exists`, 409);
     }
 
     const parent = parentPath(path);

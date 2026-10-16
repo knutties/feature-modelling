@@ -6,10 +6,20 @@ import type { FeatureKey, Manageability } from './featureKey.js';
  */
 export type Persona = 'operator' | 'customer';
 
+/**
+ * The HTTP status this error carries is set at the throw site, not guessed
+ * later from the message: `parsePersona` throws for a persona value that
+ * is not even a known role (400 - a bad request, there is no role to be
+ * forbidden from), while `assertCanManage` throws for a known persona
+ * attempting something it may not do (403 - the default below).
+ */
 export class PersonaError extends Error {
-  constructor(message: string) {
+  readonly status: number;
+
+  constructor(message: string, status = 403) {
     super(message);
     this.name = 'PersonaError';
+    this.status = status;
   }
 }
 
@@ -25,6 +35,7 @@ export function parsePersona(raw: string | undefined): Persona {
   if ((PERSONAS as string[]).includes(raw)) return raw as Persona;
   throw new PersonaError(
     `unknown persona ${JSON.stringify(raw)}; expected ${PERSONAS.join(' or ')}`,
+    400,
   );
 }
 

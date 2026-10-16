@@ -3367,6 +3367,14 @@ exactly."
 
 ### Task 10: Provider read path and HTTP API
 
+**Corrections applied after Task 10's review** (all five were defects in this plan's own text, found against the running code):
+
+1. Each error class carries its own `status`, set at the throw site, and `statusFor` reads it — see the rewritten `statusFor` below. `PersonaError` defaults to 403 with `parsePersona`'s unknown-value throw passing 400; `ProvisionError` defaults to 400 with the duplicate throw passing 409; `FeatureError` defaults to 400 with the operator-only throws passing 403; `HierarchyError` and `FeatureKeyError` are 400. This means Tasks 2, 8 and 9's error classes gain a `status` constructor parameter.
+2. `statusFor` defaults to **500**, and `handle()` logs before responding.
+3. The schema-violation test asserts something only Superposition's real message satisfies, not merely a non-empty string.
+4. `readPath.test.ts` needs a `beforeEach` resetting state (`deleteAllContexts` + `bootstrap`) — as originally written its tests depended on each other's writes and could not run in isolation.
+5. The kill-switch API test needs the same explicit TTL wait the `readPath` tests use; without it, it relies on incidental elapsed wall-clock time to see its own write.
+
 **Files:**
 - Create: `backend/src/superposition/readPath.ts`, `backend/src/server.ts`
 - Test: `backend/test/integration/readPath.test.ts`, `backend/test/integration/api.test.ts`
@@ -3678,7 +3686,10 @@ describe('entity features', () => {
       { value: 99 },
     );
     expect(status).toBe(400);
-    expect(String(body.error).length).toBeGreaterThan(0);
+    // Specific enough to fail if the message were replaced by a generic one -
+    // asserting only that the string is non-empty would pass against a
+    // hardcoded "Bad Request", which is what this test exists to rule out.
+    expect(String(body.error)).toMatch(/10|maximum|schema|validat/i);
   });
 
   it('reverts a value', async () => {
@@ -3759,18 +3770,26 @@ export interface Deps {
 }
 
 /**
- * Map a thrown error to a status code. Superposition's validation messages are
- * passed through unaltered: type and range enforcement is a feature of the
- * platform worth showing, and a generic "bad request" would hide it.
+ * Map a thrown error to a status code.
+ *
+ * Each error class CARRIES its status, set at the throw site, rather than
+ * having one inferred here by matching its message. Message-matching was the
+ * original design and it was wrong twice over: the status of the HTTP contract
+ * the frontend is built against would rest on prose, so rewording an error for
+ * clarity would silently flip a status code with no compiler error; and these
+ * messages are written in this same codebase, so nothing external would ever
+ * force the mismatch to the surface.
+ *
+ * The default is 500, not 400. An error this layer does not recognise is a
+ * server problem - a Superposition outage, a provider crash, a bug - and
+ * reporting it as "Bad Request" would blame the caller for our failure.
+ *
+ * Superposition's own validation messages still pass through unaltered: type
+ * and range enforcement is a platform feature worth showing off.
  */
 function statusFor(error: unknown): number {
-  if (error instanceof PersonaError) return 403;
-  if (error instanceof ProvisionError) return /exists/i.test(error.message) ? 409 : 400;
-  if (error instanceof HierarchyError || error instanceof FeatureKeyError) return 400;
-  if (error instanceof FeatureError) {
-    return /only an operator/i.test(error.message) ? 403 : 400;
-  }
-  return 400;
+  const status = (error as { status?: unknown } | null)?.status;
+  return typeof status === 'number' ? status : 500;
 }
 
 function handle(fn: (req: Request, res: Response) => Promise<void>) {
@@ -3779,7 +3798,11 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
       await fn(req, res);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      res.status(statusFor(error)).json({ error: message });
+      const status = statusFor(error);
+      // Log before responding: an unexpected exception must not be visible only
+      // in the HTTP response body.
+      if (status >= 500) console.error(`${req.method} ${req.path} failed:`, error);
+      res.status(status).json({ error: message });
     }
   };
 }

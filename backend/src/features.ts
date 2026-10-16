@@ -20,10 +20,19 @@ export interface ApplicationReader {
   resolveAll(context: Record<string, unknown>): Promise<Record<string, unknown>>;
 }
 
+/**
+ * The HTTP status this error carries is set at the throw site, not guessed
+ * later from the message: the kill switch's two operator-only guards pass
+ * 403 explicitly; everything else here (an unknown cohort, a key not in the
+ * catalog, ...) is a 400, the default below.
+ */
 export class FeatureError extends Error {
-  constructor(message: string) {
+  readonly status: number;
+
+  constructor(message: string, status = 400) {
     super(message);
     this.name = 'FeatureError';
+    this.status = status;
   }
 }
 
@@ -184,7 +193,7 @@ export class FeatureService {
    */
   async engageKillSwitch(key: string, value: unknown, persona: Persona): Promise<void> {
     if (persona !== 'operator') {
-      throw new FeatureError('only an operator may engage the kill switch');
+      throw new FeatureError('only an operator may engage the kill switch', 403);
     }
     await this.entry(key, persona);
     await this.controlPlane.putContext(
@@ -194,7 +203,7 @@ export class FeatureService {
 
   async disengageKillSwitch(key: string, persona: Persona): Promise<void> {
     if (persona !== 'operator') {
-      throw new FeatureError('only an operator may disengage the kill switch');
+      throw new FeatureError('only an operator may disengage the kill switch', 403);
     }
     await this.entry(key, persona);
     await this.removeKey(KILLSWITCH_CONDITION, key, `kill switch off ${key}`);
