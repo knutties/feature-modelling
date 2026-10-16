@@ -30,6 +30,7 @@ export function EntityFeatures({ path, persona, onChanged }: Props) {
       const { features } = await getFeatures(path, persona);
       setViews(features);
       setDrafts({});
+      setTimelines({});
       setError(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -74,8 +75,13 @@ export function EntityFeatures({ path, persona, onChanged }: Props) {
       setTimelines(next);
       return;
     }
-    const { timeline } = await explainFeature(path, view.key);
-    setTimelines({ ...timelines, [view.key]: timeline });
+    try {
+      const { timeline } = await explainFeature(path, view.key);
+      setTimelines({ ...timelines, [view.key]: timeline });
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    }
   }
 
   return (
