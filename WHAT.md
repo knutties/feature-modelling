@@ -32,8 +32,8 @@ In a setup where there is an hierarchy of entities, and where features values ca
 
 Note that though the value can be copied by an entity at a level n, it will most likely need to allow inheritance at levels > than n (like say enable a feature for a customer cohort under a merchant entity which copies its values from the organization).
 
-  1. Features that are to be always inherited by an entity in a hierarchy
-  2. Features that should be copied from the entity's parent at the time of entity setup
+1. Features that are to be always inherited by an entity in a hierarchy
+2. Features that should be copied from the entity's parent at the time of entity setup
 
 ## Demo
 
@@ -48,7 +48,7 @@ We could have a cohorted dimension of customers for whom profile can customize a
 All these levels will have their own attributes that would be maintained in a database which we can skip for this demo.  We would like to demonstrate features which are a combination of both the categories i.e. totally 4 in all - 
 1. internal + inherited
 2. internal + copied (not very important - but for completeness)
-2. external + interhited
+2. external + inherited
 2. external + copied
 
 The demo will have a frontend, backend which uses the Superposition provider to talk to Superposition (locally available at localhost:8080)
