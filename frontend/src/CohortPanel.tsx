@@ -32,6 +32,12 @@ export function CohortPanel({ path, persona, cohorts, features }: Props) {
     }
   }, [features]);
 
+  // `cohorts` arrives empty on the same first-mount race - resync the
+  // cohort selection too, with the identical absent-only guard.
+  useEffect(() => {
+    if (!cohorts.includes(cohort)) setCohort(cohorts[0] ?? '');
+  }, [cohorts]);
+
   const feature = features.find((candidate) => candidate.key === key);
   if (path.length !== 3) {
     return <p className="hint">Select a profile to specialize a feature for a cohort.</p>;
@@ -68,7 +74,7 @@ export function CohortPanel({ path, persona, cohorts, features }: Props) {
         {feature && (
           <ValueEditor schema={feature.schema} value={value} onChange={setValue} />
         )}
-        <button type="submit">Set</button>
+        <button type="submit" disabled={!cohort || !feature}>Set</button>
       </div>
       <p className="hint">
         Writes a context at weight 30, which outranks this profile's own 14 — so
