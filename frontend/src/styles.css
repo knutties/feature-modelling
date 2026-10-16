@@ -33,3 +33,6 @@ th, td { text-align: left; padding: .4rem .5rem; border-bottom: 1px solid #eef0f
   padding: .4rem .6rem; margin: .4rem 0; }
 .banner { background: #fef3f2; border: 1px solid #fda29b; color: #b42318;
   padding: .5rem .75rem; border-radius: 4px; margin-bottom: 1rem; }
+.timeline .weight { display: inline-block; min-width: 5.5rem; font-variant-numeric: tabular-nums;
+  font-size: .75rem; color: #475467; background: #eef0f4; border-radius: 3px;
+  padding: .05rem .3rem; margin-right: .3rem; }

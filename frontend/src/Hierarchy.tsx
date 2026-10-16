@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import {
-  type CopyReport, type EntityNode, type SkipReport, createEntity,
+  type CopyReport, type EntityNode, type SkipReport, createEntity, retryEntity,
 } from './api.js';
 
 const CHILD_LEVEL: Record<string, string | undefined> = {
@@ -48,10 +48,36 @@ export function Hierarchy({ tree, selected, onSelect, onChanged }: Props) {
     }
   }
 
+  /**
+   * Re-run provisioning for an entity whose creation failed part-way. The
+   * spec's error handling promises a retry for `provisioning_failed`, and
+   * `Provisioner.retry` has always existed - but with no button and no route
+   * it was unreachable, and re-creating the entity returns 409, so a failed
+   * entity could only be repaired by hand-editing the entity store.
+   */
+  async function retry(path: string[]) {
+    try {
+      const result = await retryEntity(path);
+      setReport({ path, copied: result.copied, skipped: result.skipped });
+      setError(null);
+      onChanged();
+      onSelect(path);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setReport(null);
+    }
+  }
+
   return (
     <aside className="hierarchy">
       <h2>Entities</h2>
-      <Nodes nodes={tree} selected={selected} onSelect={onSelect} onAddUnder={setParent} />
+      <Nodes
+        nodes={tree}
+        selected={selected}
+        onSelect={onSelect}
+        onAddUnder={setParent}
+        onRetry={retry}
+      />
 
       {childLevel && (
         <form onSubmit={submit}>
@@ -124,12 +150,13 @@ function levelAt(depth: number): string {
 }
 
 function Nodes({
-  nodes, selected, onSelect, onAddUnder,
+  nodes, selected, onSelect, onAddUnder, onRetry,
 }: {
   nodes: EntityNode[];
   selected: string[] | null;
   onSelect: (path: string[]) => void;
   onAddUnder: (path: string[]) => void;
+  onRetry: (path: string[]) => void;
 }) {
   if (nodes.length === 0) return <p className="hint">No entities yet.</p>;
   return (
@@ -143,7 +170,16 @@ function Nodes({
                 {node.entity.name} <small>{node.entity.level}</small>
               </button>
               {node.entity.provisioningState === 'provisioning_failed' && (
-                <span className="warn" title="provisioning failed">!</span>
+                <>
+                  <span className="warn" title="provisioning failed">!</span>
+                  <button
+                    className="link"
+                    title="Re-run provisioning for this entity"
+                    onClick={() => onRetry(node.entity.path)}
+                  >
+                    Retry
+                  </button>
+                </>
               )}
               {node.entity.level !== 'profile' && (
                 <button className="link" onClick={() => onAddUnder(node.entity.path)}>+</button>
@@ -154,6 +190,7 @@ function Nodes({
               selected={selected}
               onSelect={onSelect}
               onAddUnder={onAddUnder}
+              onRetry={onRetry}
             />
           </li>
         );

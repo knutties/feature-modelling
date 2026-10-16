@@ -3,6 +3,7 @@ import {
   type FeatureView, type Persona, type TimelineItem,
   explainFeature, getFeatures, revertFeature, setFeature,
 } from './api.js';
+import { Timeline } from './Timeline.js';
 import { ValueEditor } from './ValueEditor.js';
 
 interface Props {
@@ -167,22 +168,6 @@ export function EntityFeatures({ path, persona, onChanged }: Props) {
           })}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-function Timeline({ items }: { items: TimelineItem[] }) {
-  if (items.length === 0) {
-    return <p className="hint">No context applied — this is the workspace default.</p>;
-  }
-  return (
-    <div>
-      {items.map((item, index) => (
-        <div className="timeline" key={item.context_id}>
-          {index + 1}. <code>{JSON.stringify(item.condition)}</code>{' '}
-          changed {JSON.stringify(item.value_before)} to {JSON.stringify(item.value_after)}
-        </div>
-      ))}
     </div>
   );
 }
