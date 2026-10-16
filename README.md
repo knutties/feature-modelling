@@ -28,6 +28,34 @@ npm run dev:backend   # :3001
 npm run dev:frontend  # :5173
 ```
 
+### With `just`
+
+A [`justfile`](justfile) wraps all of the above. `just` on its own lists everything.
+
+```bash
+just setup            # install, bootstrap, seed - the whole first run
+just dev              # both servers; Ctrl-C stops both
+just reset            # back to a known-good demo after you have poked at it
+just verify           # types, build, unit tests, integration tests
+```
+
+It also reads the demo from the command line, which is the fastest way to see the
+model without clicking:
+
+```bash
+just tree                                     # the entity hierarchy
+just features acme~m1~p1                      # values with their provenance
+just features acme~m1~p1 customer             # the same entity as a customer sees it
+just resolve  acme~m1~p1 cust_001             # what the application resolves
+just explain  acme~m1~p1 <key> cust_001 true  # the cascade, with each context's priority
+just killswitches                             # any emergency override currently engaged
+```
+
+`just explain` is the one worth running. Without a `customer_id` it shows only the
+entity rows; name a cohort customer and the priority-30 row appears, add
+`killswitch=true` and the priority-64 row joins it — the two rows that decide the
+most interesting cases, which no other screen can show you.
+
 ## The four quadrants
 
 | key | manageability | propagation |
