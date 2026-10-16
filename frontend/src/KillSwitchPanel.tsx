@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   type Feature, type Persona, disengageKillSwitch, engageKillSwitch,
 } from './api.js';
@@ -21,6 +21,18 @@ export function KillSwitchPanel({ persona, features, onChanged }: Props) {
   const [value, setValue] = useState<unknown>(features[0]?.default);
   const [engaged, setEngaged] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+
+  // `features` arrives empty on first mount (the catalog fetch in App.tsx is
+  // async and this panel mounts unconditionally), and a useState initializer
+  // only runs once - so resync key/value once the real catalog lands, but
+  // only when the current key is no longer present, so a re-render that
+  // merely re-creates the same array does not stomp a selection in progress.
+  useEffect(() => {
+    if (!features.some((candidate) => candidate.key === key)) {
+      setKey(features[0]?.key ?? '');
+      setValue(features[0]?.default);
+    }
+  }, [features]);
 
   if (persona !== 'operator') return null;
   const feature = features.find((candidate) => candidate.key === key);
@@ -71,12 +83,17 @@ export function KillSwitchPanel({ persona, features, onChanged }: Props) {
           {feature && (
             <ValueEditor schema={feature.schema} value={value} onChange={setValue} />
           )}
-          <button type="submit">Engage</button>
+          <button type="submit" disabled={!feature}>Engage</button>
         </div>
         <p className="hint">
           The emergency value defaults to the platform default — the conservative
           choice — but any schema-valid value is allowed, since the requirement is
           wholesale modification, not only restoring the default.
+        </p>
+        <p className="hint">
+          Writes one context at weight 64, above the 62 that every other
+          dimension sums to — so a single row overrides the feature everywhere
+          at once, while every entity override stays on disk untouched.
         </p>
       </form>
       {engaged.map((item) => (

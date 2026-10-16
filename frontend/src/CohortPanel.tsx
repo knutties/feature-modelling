@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { type Feature, type Persona, setCohortFeature } from './api.js';
 import { ValueEditor } from './ValueEditor.js';
 
@@ -20,6 +20,17 @@ export function CohortPanel({ path, persona, cohorts, features }: Props) {
   const [value, setValue] = useState<unknown>(features[0]?.default);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // `features` arrives empty on first mount in the same race as the kill
+  // switch panel - resync key/value once the real catalog lands, but only
+  // when the current key is no longer present, so a re-render that merely
+  // re-creates the same array does not stomp a selection in progress.
+  useEffect(() => {
+    if (!features.some((candidate) => candidate.key === key)) {
+      setKey(features[0]?.key ?? '');
+      setValue(features[0]?.default);
+    }
+  }, [features]);
 
   const feature = features.find((candidate) => candidate.key === key);
   if (path.length !== 3) {
