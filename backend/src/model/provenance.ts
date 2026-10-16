@@ -56,5 +56,14 @@ export function describeProvenance(provenance: Provenance): string {
       return `cohort ${provenance.cohort}`;
     case 'killswitch':
       return 'kill switch engaged';
+    default: {
+      // `noImplicitReturns` is not part of `strict`, so without this branch a
+      // sixth Provenance variant would fall off the end of a `string`-returning
+      // function and silently label itself `undefined` in the UI. Assigning the
+      // narrowed-to-never value makes that a compile error instead, naming the
+      // variant that was not handled.
+      const _never: never = provenance;
+      throw new Error(`unhandled provenance ${JSON.stringify(_never)}`);
+    }
   }
 }

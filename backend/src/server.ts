@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import express, { type Express, type Request, type Response } from 'express';
 import { EntityStore } from './entities.js';
 import { FeatureError, FeatureService } from './features.js';
@@ -68,11 +69,17 @@ function handle(fn: (req: Request, res: Response) => Promise<void>) {
     try {
       await fn(req, res);
     } catch (error) {
-      // Logged unconditionally so an unexpected failure is visible server
-      // side too, not only in the HTTP response body the client sees.
-      console.error(error);
       const message = error instanceof Error ? error.message : String(error);
-      res.status(statusFor(error)).json({ error: message });
+      const status = statusFor(error);
+      // Only a 5xx is logged. A 4xx is the API working as designed - a schema
+      // rejection, a persona refusal, a duplicate entity - and the client is
+      // already told about it in the response body. Logging those too buried
+      // genuine server-side failures in a page of indistinguishable stack
+      // traces, which is exactly what a log exists to prevent. Method and
+      // path are included because the error alone does not say which request
+      // produced it.
+      if (status >= 500) console.error(`${req.method} ${req.path} failed:`, error);
+      res.status(status).json({ error: message });
     }
   };
 }
@@ -133,9 +140,39 @@ export function createApp(deps: Deps): Express {
     });
   }));
 
+  /**
+   * `customer_id` and `killswitch` are optional and default to "no customer,
+   * switch disengaged" - the entity's configured view, which is what the
+   * feature table asks for. Supplying them is what makes the cohort step
+   * (weight 30) and the kill-switch step (weight 64) appear in the timeline
+   * at all: a context naming a dimension the query does not carry cannot
+   * match, so without them the two highest-weight rows of the cascade are
+   * unobservable. The resolver probe passes whatever it is previewing.
+   */
   app.get('/api/entities/:path/features/:key/explain', handle(async (req, res) => {
-    const timeline = await deps.features.explain(decodePath(req.params.path!), req.params.key!);
+    const customerId = req.query['customer_id'];
+    const timeline = await deps.features.explain(
+      decodePath(req.params.path!),
+      req.params.key!,
+      {
+        ...(typeof customerId === 'string' && customerId !== ''
+          ? { customerId }
+          : {}),
+        killswitch: req.query['killswitch'] === 'true',
+      },
+    );
     res.json({ timeline });
+  }));
+
+  /**
+   * Re-run provisioning for an entity whose first attempt failed. Without
+   * this the `provisioning_failed` state the spec's error handling promises a
+   * retry for was a dead end: re-creating the entity returns 409, so the only
+   * repair was hand-editing the entity store.
+   */
+  app.post('/api/entities/:path/retry', handle(async (req, res) => {
+    const result = await deps.provisioner.retry(decodePath(req.params.path!));
+    res.json(result);
   }));
 
   app.put('/api/entities/:path/features/:key', handle(async (req, res) => {
@@ -157,6 +194,18 @@ export function createApp(deps: Deps): Express {
       (req.body as { value: unknown }).value, personaOf(req),
     );
     res.status(204).end();
+  }));
+
+  /**
+   * Which features are currently under an engaged kill switch, read from the
+   * live contexts rather than remembered in the browser. The spec's screen 4
+   * promises "a standing banner while engaged"; derived from component state
+   * alone, that banner vanished on reload and never appeared in a second tab,
+   * leaving a reachable state in which an emergency override is active and
+   * nothing on screen says so.
+   */
+  app.get('/api/killswitch', handle(async (req, res) => {
+    res.json({ engaged: await deps.features.engagedKillSwitches(personaOf(req)) });
   }));
 
   app.post('/api/killswitch/:key', handle(async (req, res) => {
@@ -189,7 +238,12 @@ export async function startServer(port = Number(process.env['PORT'] ?? 3001)): P
   const client = makeClient();
   const controlPlane = new ControlPlane(client, SUPERPOSITION.orgId, SUPERPOSITION.workspaceId);
   const entities = new EntityStore(
-    process.env['ENTITY_STORE'] ?? new URL('../data/entities.json', import.meta.url).pathname,
+    // fileURLToPath, not `.pathname`: a URL's pathname is percent-encoded, so
+    // a checkout under a directory containing a space would hand the store a
+    // path with a literal "%20" in it and it would silently write to a file
+    // nobody ever looks at.
+    process.env['ENTITY_STORE']
+      ?? fileURLToPath(new URL('../data/entities.json', import.meta.url)),
   );
   const reader = new ApplicationReader();
   await reader.init();
@@ -203,8 +257,13 @@ export async function startServer(port = Number(process.env['PORT'] ?? 3001)): P
     reader,
   });
 
-  app.listen(port, () => {
-    console.log(`backend on http://localhost:${port} -> workspace ${SUPERPOSITION.workspaceId}`);
+  // Bound to loopback, not 0.0.0.0. Every mutating route here writes to a
+  // live configuration platform with no authentication and a client-supplied
+  // persona - auth is explicitly out of scope for this demo, so the write API
+  // must not be reachable from the network. Vite's own dev server defaults to
+  // the same.
+  app.listen(port, '127.0.0.1', () => {
+    console.log(`backend on http://127.0.0.1:${port} -> workspace ${SUPERPOSITION.workspaceId}`);
   });
 }
 

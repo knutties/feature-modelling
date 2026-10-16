@@ -1,6 +1,7 @@
 import { type CatalogEntry, buildCatalog, visibleCatalog } from './catalog.js';
+import { weightOf } from './model/dimensions.js';
 import type { FeatureKey } from './model/featureKey.js';
-import { type EntityPath, pathToCondition } from './model/hierarchy.js';
+import { type EntityPath, levelOf, pathToCondition } from './model/hierarchy.js';
 import { type Persona, assertCanManage, resolvePrefixes } from './model/persona.js';
 import {
   type Provenance, type TimelineItem, describeProvenance, provenanceOf,
@@ -44,6 +45,23 @@ export interface FeatureView {
   provenance: Provenance;
   provenanceLabel: string;
   editable: boolean;
+}
+
+/**
+ * One timeline step as the UI gets it: Superposition's own explanation entry
+ * plus the priority that decided it.
+ *
+ * The weight is OURS, not the server's. `GetResolvedConfigExplanation` returns
+ * no priority field at all (confirmed against Superposition's smithy model),
+ * yet the whole model rests on the arithmetic - deeper beats shallower, cohort
+ * beats entity, kill switch beats everything - so a timeline that showed the
+ * contexts without their weights would show the cascade's effect while hiding
+ * its cause. `weightOf` computes the same Sum(2^position) Superposition does,
+ * from the same dimension positions bootstrap created, and an integration test
+ * pins the two against each other on live contexts.
+ */
+export interface TimelineStep extends TimelineItem {
+  weight: number;
 }
 
 export interface ResolvedView {
@@ -109,13 +127,58 @@ export class FeatureService {
     return views;
   }
 
-  async explain(path: EntityPath, key: string): Promise<TimelineItem[]> {
-    const condition = { ...pathToCondition(path), killswitch: false };
+  /**
+   * The cascade that produced one key's value, as an ordered timeline with
+   * each step's priority.
+   *
+   * `customerId` and `killswitch` widen the query, and that is the whole point
+   * of them: a context naming a dimension the query does not carry cannot
+   * match, so with the entity path alone the cohort context (weight 30) and
+   * the kill-switch context (weight 64) - the two most interesting rows of the
+   * cascade - can never appear in any timeline. Both default to absent/false,
+   * which is the entity's own configured view and what the feature table asks
+   * for; the resolver probe passes whatever it is previewing. `viewFor` is
+   * deliberately NOT given these: the feature table shows the entity as
+   * configured, not as one customer sees it in an emergency.
+   */
+  async explain(
+    path: EntityPath,
+    key: string,
+    options: { customerId?: string; killswitch?: boolean } = {},
+  ): Promise<TimelineStep[]> {
+    const condition: Record<string, unknown> = {
+      ...pathToCondition(path),
+      killswitch: options.killswitch ?? false,
+    };
+    if (options.customerId) condition['customer_id'] = options.customerId;
+
     const [timeline, overrideById] = await Promise.all([
       this.controlPlane.explain(key, condition),
       this.overridesByContextId(),
     ]);
-    return ownedSteps(timeline, key, overrideById);
+    return ownedSteps(timeline, key, overrideById).map((item) => ({
+      ...item,
+      weight: weightOf(item.condition),
+    }));
+  }
+
+  /**
+   * The keys currently under an engaged kill switch, read from the live
+   * contexts: one filter for a condition naming `killswitch`, since engaging
+   * writes exactly one context at that condition and disengaging removes the
+   * key from it. Operator-only, like engage and disengage - and for a second
+   * reason here, that an engaged switch may name an `internal.*` key a
+   * customer is not shown.
+   */
+  async engagedKillSwitches(persona: Persona): Promise<string[]> {
+    if (persona !== 'operator') {
+      throw new FeatureError('only an operator may list engaged kill switches', 403);
+    }
+    const contexts = await this.controlPlane.listContexts();
+    return contexts
+      .filter((row) => Object.hasOwn(row.condition, 'killswitch'))
+      .flatMap((row) => Object.keys(row.override))
+      .sort();
   }
 
   /**
@@ -176,6 +239,31 @@ export class FeatureService {
     if (!(COHORT_NAMES as string[]).includes(cohort)) {
       throw new FeatureError(
         `unknown cohort ${JSON.stringify(cohort)}; expected ${COHORT_NAMES.join(', ')}`,
+      );
+    }
+    // 'otherwise' is the dimension enum's mandatory fallback, not a cohort
+    // anyone belongs to, so the UI never offers it - but the route did, and a
+    // context naming it would quietly shadow the entity's own value for every
+    // customer outside a real cohort.
+    if (cohort === 'otherwise') {
+      throw new FeatureError(
+        `'otherwise' is the cohort dimension's mandatory fallback, not a cohort to `
+        + `specialize for; expected one of ${Object.keys(COHORTS).join(', ')}`,
+      );
+    }
+    // Cohort specialization is defined BENEATH A PROFILE, and the weights say
+    // why it cannot be loosened: a cohort context at org level weighs 18
+    // (2 + 16) and at merchant level 22, both above a profile's own 14 - so an
+    // org-level cohort override would outrank every profile's own value, which
+    // reads as a precedence inversion. The UI only ever offers this on a
+    // profile; this makes the route agree.
+    const level = levelOf(path);
+    if (level !== 'profile') {
+      throw new FeatureError(
+        `cohort specialization is only defined beneath a profile, but `
+        + `${path.join('/')} is a ${level}: its cohort context would weigh `
+        + `${weightOf({ ...pathToCondition(path), customer_cohort: cohort })}, above a `
+        + `profile's own 14, so it would outrank every profile beneath it`,
       );
     }
     await this.entry(key, persona);

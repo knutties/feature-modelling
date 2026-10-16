@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url';
 import { EntityStore } from '../src/entities.js';
 import { FeatureService } from '../src/features.js';
 import { Provisioner } from '../src/provisioner.js';
@@ -21,7 +22,11 @@ const controlPlane = new ControlPlane(client, SUPERPOSITION.orgId, SUPERPOSITION
 await bootstrap(controlPlane);
 
 const store = new EntityStore(
-  process.env['ENTITY_STORE'] ?? new URL('../data/entities.json', import.meta.url).pathname,
+  // fileURLToPath, not `.pathname`: a pathname is percent-encoded, so a
+  // checkout under a directory containing a space would seed a file with a
+  // literal "%20" in its path while the server read the real one.
+  process.env['ENTITY_STORE']
+    ?? fileURLToPath(new URL('../data/entities.json', import.meta.url)),
 );
 const provisioner = new Provisioner(controlPlane, store);
 const features = new FeatureService(controlPlane);

@@ -7,6 +7,15 @@ export const COHORTS = {
   high_risk: ['cust_009'],
 } as const;
 
+/**
+ * The dimension `customer_cohort` is a local cohort OF. It appears twice - in
+ * the JSONLogic each cohort definition evaluates, and in the `LOCAL_COHORT`
+ * declaration Superposition stores - and the two must name the same dimension
+ * or the cohort silently never matches. One constant, used in both places, so
+ * renaming the parent cannot desync them.
+ */
+export const COHORT_PARENT = 'customer_id';
+
 export type CohortName = keyof typeof COHORTS | 'otherwise';
 
 /** Every cohort name plus the mandatory fallback. */
@@ -17,11 +26,15 @@ export const COHORT_NAMES: CohortName[] = [...Object.keys(COHORTS) as (keyof typ
  * client-side. `in` with an explicit list is the form Superposition documents,
  * so it needs no assumption about which JSONLogic operators are supported.
  * "otherwise" is required in the enum as the fallback.
+ *
+ * `parentName` is a parameter rather than a literal so the dimension it reads
+ * (`{ var: ... }`) is necessarily the same one declared as `localCohortOf`
+ * below - see COHORT_PARENT.
  */
-function cohortSchema(): Record<string, unknown> {
+function cohortSchema(parentName: string): Record<string, unknown> {
   const definitions: Record<string, unknown> = {};
   for (const [name, members] of Object.entries(COHORTS)) {
-    definitions[name] = { in: [{ var: 'customer_id' }, [...members]] };
+    definitions[name] = { in: [{ var: parentName }, [...members]] };
   }
   return { type: 'string', enum: COHORT_NAMES, definitions };
 }
@@ -33,11 +46,11 @@ export const DIMENSION_SPECS: DimensionSpec[] = [
   {
     name: 'customer_cohort',
     position: DIMENSION_POSITIONS.customer_cohort,
-    schema: cohortSchema(),
-    description: 'Customer cohort, derived from customer_id',
-    localCohortOf: 'customer_id',
+    schema: cohortSchema(COHORT_PARENT),
+    description: `Customer cohort, derived from ${COHORT_PARENT}`,
+    localCohortOf: COHORT_PARENT,
   },
-  { name: 'customer_id', position: DIMENSION_POSITIONS.customer_id, schema: { type: 'string' }, description: 'Customer id' },
+  { name: COHORT_PARENT, position: DIMENSION_POSITIONS.customer_id, schema: { type: 'string' }, description: 'Customer id' },
   { name: 'killswitch', position: DIMENSION_POSITIONS.killswitch, schema: { type: 'boolean' }, description: 'Emergency wholesale override' },
 ];
 
